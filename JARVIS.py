@@ -115,3 +115,12 @@ if __name__ == "__main__":
 
 
 uv pip install requests --system
+
+Αντικατάστησε τις τιμές στις μεταβλητές GEMINI_KEY (γραμμή 12) και FISH_AUDIO_API_KEY (γραμμή 15) με τα δικά σου API Keys.
+
+Αποθήκευσε το αρχείο (Ctrl + S).
+
+Τρέξε από το τερματικό:
+
+PowerShell
+python jarvis.py
