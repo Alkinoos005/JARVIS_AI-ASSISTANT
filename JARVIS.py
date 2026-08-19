@@ -3,25 +3,53 @@ import time
 import asyncio
 import webbrowser
 import threading
+import requests
 import edge_tts
 import pygame
 import speech_recognition as sr
 import customtkinter as ctk
 from google import genai
 
+# Για τον έλεγχο έντασης ήχου στα Windows
+from comtypes import CLSCTX_ALL
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Βάλε εδώ το δικό σου Gemini API Key
 GEMINI_KEY = "ΤΟ_GEMINI_API_KEY_ΣΟΥ"
 client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
-# SYSTEM COMMANDS (PC CONTROL)
+# SYSTEM COMMANDS (PC CONTROL & FEATURES)
 # ==========================================
+def set_volume(level):
+    """Αλλάζει την ένταση ήχου των Windows (level: 0.0 έως 1.0)"""
+    try:
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        volume.SetMasterVolumeLevelScalar(level, None)
+        return True
+    except Exception as e:
+        print(f"[Volume Error]: {e}")
+        return False
+
+def get_weather(city="Athens"):
+    """Παίρνει δωρεάν τα δεδομένα καιρού χωρίς API Key"""
+    try:
+        url = f"https://wttr.in/{city}?format=%C+%t"
+        response = requests.get(url, timeout=3)
+        if response.status_code == 200:
+            return response.text.strip()
+    except:
+        pass
+    return "unable to fetch weather"
+
 def execute_system_command(command):
     cmd = command.lower()
     
+    # --- 1. Web & Applications ---
     if "youtube" in cmd:
         speak_jarvis("Opening YouTube for you, sir.")
         webbrowser.open("https://www.youtube.com")
@@ -29,6 +57,10 @@ def execute_system_command(command):
     elif "google" in cmd or "browser" in cmd:
         speak_jarvis("Opening the browser, sir.")
         webbrowser.open("https://www.google.com")
+        return True
+    elif "spotify" in cmd:
+        speak_jarvis("Opening Spotify, sir.")
+        webbrowser.open("https://open.spotify.com")
         return True
     elif "vscode" in cmd or "code" in cmd:
         speak_jarvis("Launching Visual Studio Code, sir.")
@@ -38,13 +70,33 @@ def execute_system_command(command):
         speak_jarvis("Opening the calculator, sir.")
         os.system("calc")
         return True
+
+    # --- 2. Volume Control ---
+    elif "mute" in cmd or "volume zero" in cmd:
+        if set_volume(0.0):
+            speak_jarvis("Audio muted, sir.")
+        return True
+    elif "volume max" in cmd or "volume 100" in cmd:
+        if set_volume(1.0):
+            speak_jarvis("Volume set to maximum, sir.")
+        return True
+    elif "volume medium" in cmd or "volume 50" in cmd:
+        if set_volume(0.5):
+            speak_jarvis("Volume set to fifty percent, sir.")
+        return True
+
+    # --- 3. Weather Forecast ---
+    elif "weather" in cmd:
+        weather_info = get_weather("Athens") # Μπορείς να αλλάξεις την πόλη
+        speak_jarvis(f"The current weather status is {weather_info}, sir.")
+        return True
+
     return False
 
 # ==========================================
 # VOICE SYNTHESIS (Monotone British Tone)
 # ==========================================
 async def generate_speech(text):
-    # -12% rate & -8Hz pitch για πιο υποτονικό, μονότονο και ήρεμο ρομποτικό ύφος
     communicate = edge_tts.Communicate(
         text, "en-GB-RyanNeural", rate="-12%", pitch="-8Hz"
     )
@@ -91,7 +143,6 @@ def jarvis_loop():
     app.update_status("STANDBY: Say 'Jarvis' to activate...")
     
     while True:
-        # Ακούει σιωπηλά στο παρασκήνιο χωρίς να τυπώνει συνεχώς μηνύματα
         wake_input = listen_for_audio()
         
         if wake_input and "jarvis" in wake_input.lower():
@@ -107,7 +158,9 @@ def jarvis_loop():
                     app.destroy()
                     break
                 
+                # Εκτέλεση τοπικής εντολής
                 if not execute_system_command(cmd):
+                    # Gemini AI για γενικές ερωτήσεις
                     try:
                         response = client.models.generate_content(
                             model='gemini-2.5-flash',
@@ -125,7 +178,6 @@ def jarvis_loop():
                     except Exception as e:
                         speak_jarvis("I seem to have encountered a temporary glitch, sir.")
             
-            # Επιστροφή σε standby κατάσταση μετά την εκτέλεση της εντολής
             app.update_status("STANDBY: Say 'Jarvis' to activate...")
         
         time.sleep(0.1)
@@ -141,32 +193,27 @@ class JarvisHUD(ctk.CTk):
         self.geometry("600x400")
         ctk.set_appearance_mode("dark")
 
-        # Κεντρικό Frame
         self.main_frame = ctk.CTkFrame(self, corner_radius=15, fg_color="#0a0f1d", border_color="#00d2ff", border_width=2)
         self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
 
-        # Τίτλος HUD
         self.title_label = ctk.CTkLabel(
             self.main_frame, text="J.A.R.V.I.S. MARK VII", 
             font=("Orbitron", 22, "bold"), text_color="#00d2ff"
         )
         self.title_label.pack(pady=(20, 10))
 
-        # Status Display
         self.status_label = ctk.CTkLabel(
             self.main_frame, text="INITIALIZING...", 
             font=("Consolas", 14), text_color="#7f8c8d", wraplength=500
         )
         self.status_label.pack(pady=15)
 
-        # User Text Display
         self.user_label = ctk.CTkLabel(
             self.main_frame, text="", 
             font=("Consolas", 13, "italic"), text_color="#ffffff", wraplength=500
         )
         self.user_label.pack(pady=10)
 
-        # Arc Reactor Visual
         self.arc_reactor = ctk.CTkButton(
             self.main_frame, text="ARC CORE ONLINE", font=("Consolas", 12, "bold"),
             fg_color="transparent", border_color="#00d2ff", border_width=1,
@@ -185,8 +232,5 @@ class JarvisHUD(ctk.CTk):
 # ==========================================
 if __name__ == "__main__":
     app = JarvisHUD()
-    
-    # Εκτέλεση της λογικής του Jarvis σε ξεχωριστό background thread
     threading.Thread(target=jarvis_loop, daemon=True).start()
-    
     app.mainloop()
