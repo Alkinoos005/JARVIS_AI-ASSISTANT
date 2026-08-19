@@ -13,11 +13,11 @@ import speech_recognition as sr
 import customtkinter as ctk
 import tkinter as tk
 from google import genai
-
+ 
 # Για τον έλεγχο έντασης ήχου στα Windows
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-
+ 
 # ==========================================
 # CONFIGURATION
 # ==========================================
@@ -26,16 +26,23 @@ from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 #   GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_KEY = " "
 client = genai.Client(api_key=GEMINI_KEY)
-
-# Colors used by both backend state changes and the HUD
+ 
 STATE_COLORS = {
-    "standby":    "#00f0ff",   # cyan
+    "standby":    "#00e5ff",   # electric blue
     "listening":  "#39ff14",   # green
-    "processing": "#ffaa00",   # amber
-    "speaking":   "#00aaff",   # blue
-    "error":      "#ff3b3b",   # red
+    "processing": "#ffb400",   # amber
+    "speaking":   "#00c8ff",   # bright blue
+    "error":      "#ff3b3b",   # red / warning
 }
-
+ 
+NEWS_FEED = [
+    "STARK INDUSTRIES | Latest: Quantum Tunneling Data Uplink Stable",
+    "MARK VII | Repulsor Calibration Nominal",
+    "NETWORK | Encrypted Channel Active",
+    "R&D | New Alloy Stress Test Passed",
+    "SATCOM | Orbital Uplink: 3 Satellites In Range",
+]
+ 
 # ==========================================
 # SYSTEM COMMANDS & FEATURES
 # ==========================================
@@ -50,8 +57,8 @@ def set_volume(level):
     except Exception as e:
         print(f"[Volume Error]: {e}")
         return False
-
-
+ 
+ 
 def get_weather(city="Athens"):
     """Παίρνει δωρεάν τα δεδομένα καιρού χωρίς API Key"""
     try:
@@ -62,11 +69,31 @@ def get_weather(city="Athens"):
     except Exception:
         pass
     return "N/A"
-
-
+ 
+ 
+def lock_workstation():
+    try:
+        os.system("rundll32.exe user32.dll,LockWorkStation")
+        return True
+    except Exception as e:
+        print(f"[Lock Error]: {e}")
+        return False
+ 
+ 
+def get_battery_status():
+    try:
+        batt = psutil.sensors_battery()
+        if batt is None:
+            return "AC POWER (no battery)"
+        plugged = "CHARGING" if batt.power_plugged else "ON BATTERY"
+        return f"{int(batt.percent)}%  ({plugged})"
+    except Exception:
+        return "N/A"
+ 
+ 
 def execute_system_command(command):
     cmd = command.lower()
-
+ 
     # --- 1. Web & Applications ---
     if "youtube" in cmd:
         speak_jarvis("Opening YouTube for you, sir.")
@@ -88,7 +115,11 @@ def execute_system_command(command):
         speak_jarvis("Opening the calculator, sir.")
         os.system("calc")
         return True
-
+    elif "lock" in cmd:
+        speak_jarvis("Locking the workstation, sir.")
+        lock_workstation()
+        return True
+ 
     # --- 2. Volume Control ---
     elif "mute" in cmd or "volume zero" in cmd:
         if set_volume(0.0):
@@ -102,16 +133,21 @@ def execute_system_command(command):
         if set_volume(0.5):
             speak_jarvis("Volume set to fifty percent, sir.")
         return True
-
+ 
     # --- 3. Weather Forecast ---
     elif "weather" in cmd:
         weather_info = get_weather("Athens")
         speak_jarvis(f"The current weather status is {weather_info}, sir.")
         return True
-
+ 
+    # --- 4. Battery ---
+    elif "battery" in cmd or "power level" in cmd:
+        speak_jarvis(f"Power status: {get_battery_status()}, sir.")
+        return True
+ 
     return False
-
-
+ 
+ 
 # ==========================================
 # VOICE SYNTHESIS (Monotone British Tone)
 # ==========================================
@@ -120,8 +156,8 @@ async def generate_speech(text):
         text, "en-GB-RyanNeural", rate="-12%", pitch="-8Hz"
     )
     await communicate.save("jarvis_voice.mp3")
-
-
+ 
+ 
 def speak_jarvis(text):
     if hasattr(app, "update_status"):
         app.update_status(f"JARVIS: {text}")
@@ -129,23 +165,23 @@ def speak_jarvis(text):
         app.log(f"JARVIS: {text}")
     if hasattr(app, "set_state"):
         app.set_state("speaking")
-
+ 
     asyncio.run(generate_speech(text))
-
+ 
     pygame.mixer.init()
     pygame.mixer.music.load("jarvis_voice.mp3")
     pygame.mixer.music.play()
     while pygame.mixer.music.get_busy():
         pygame.time.Clock().tick(10)
     pygame.mixer.quit()
-
+ 
     if os.path.exists("jarvis_voice.mp3"):
         os.remove("jarvis_voice.mp3")
-
+ 
     if hasattr(app, "set_state"):
         app.set_state("standby")
-
-
+ 
+ 
 # ==========================================
 # SPEECH RECOGNITION (STT)
 # ==========================================
@@ -154,7 +190,7 @@ def listen_for_audio(prompt_text=None, listening_state=False):
         app.update_status(prompt_text)
     if listening_state and hasattr(app, "set_state"):
         app.set_state("listening")
-
+ 
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         recognizer.adjust_for_ambient_noise(source, duration=0.2)
@@ -169,8 +205,8 @@ def listen_for_audio(prompt_text=None, listening_state=False):
         finally:
             if listening_state and hasattr(app, "set_state"):
                 app.set_state("standby")
-
-
+ 
+ 
 # ==========================================
 # CORE ASSISTANT LOGIC (Background Thread)
 # ==========================================
@@ -178,29 +214,27 @@ def jarvis_loop():
     speak_jarvis("Systems initialized. Standing by for your instructions, sir.")
     app.update_status("STANDBY: Say 'Jarvis' to activate...")
     app.set_state("standby")
-
+ 
     while True:
         wake_input = listen_for_audio()
-
+ 
         if wake_input and "jarvis" in wake_input.lower():
             speak_jarvis("At your service, sir.")
-
+ 
             user_command = listen_for_audio("LISTENING FOR COMMAND...", listening_state=True)
             if user_command:
                 app.update_user_text(f"You: {user_command}")
                 app.log(f"You: {user_command}")
                 cmd = user_command.lower()
-
+ 
                 if "exit" in cmd or "quit" in cmd:
                     speak_jarvis("Shutting down systems. Have a good day, sir.")
                     app.destroy()
                     break
-
+ 
                 app.set_state("processing")
-
-                # Εκτέλεση τοπικής εντολής συστήματος
+ 
                 if not execute_system_command(cmd):
-                    # Gemini AI για γενικές ερωτήσεις
                     try:
                         response = client.models.generate_content(
                             model="gemini-2.5-flash",
@@ -218,239 +252,344 @@ def jarvis_loop():
                     except Exception:
                         app.set_state("error")
                         speak_jarvis("I seem to have encountered a temporary glitch, sir.")
-
+ 
             app.update_status("STANDBY: Say 'Jarvis' to activate...")
             app.set_state("standby")
-
+ 
         time.sleep(0.1)
-
-
+ 
+ 
 # ==========================================
 # ADVANCED STARK HUD INTERFACE
 # ==========================================
 class AdvancedJarvisHUD(ctk.CTk):
     def __init__(self):
         super().__init__()
-
+ 
         self.title("J.A.R.V.I.S. MARK VII SYSTEM INTERFACE")
-        self.geometry("1200x720")
+        self.geometry("1400x820")
         self.configure(fg_color="#02060d")
         ctk.set_appearance_mode("dark")
-
+ 
         self.state_name = "standby"
         self.state_color = STATE_COLORS["standby"]
         self.reactor_angle = 0
         self.pulse_t = 0.0
-        self.mic_bars = [4] * 12
+        self.mic_bars = [4] * 14
         self.log_lines = []
-
+        self.news_index = 0
+ 
         # ---------------- HEADER ----------------
-        self.header_frame = ctk.CTkFrame(self, fg_color="#071022", border_color="#00f0ff",
+        self.header_frame = ctk.CTkFrame(self, fg_color="#071022", border_color="#00e5ff",
                                           border_width=1, corner_radius=10)
         self.header_frame.pack(fill="x", padx=15, pady=(15, 5))
-
-        self.title_label = ctk.CTkLabel(
-            self.header_frame, text="STARK INDUSTRIES  //  J.A.R.V.I.S. HUD INTERFACE",
-            font=("Consolas", 18, "bold"), text_color="#00f0ff"
-        )
-        self.title_label.pack(side="left", padx=20, pady=10)
-
-        self.state_pill = ctk.CTkLabel(
-            self.header_frame, text="● STANDBY", font=("Consolas", 13, "bold"),
-            text_color=STATE_COLORS["standby"]
-        )
+ 
+        ctk.CTkLabel(self.header_frame, text="STARK INDUSTRIES  //  J.A.R.V.I.S. HUD INTERFACE",
+                     font=("Consolas", 18, "bold"), text_color="#00e5ff").pack(side="left", padx=20, pady=10)
+ 
+        self.state_pill = ctk.CTkLabel(self.header_frame, text="● STANDBY", font=("Consolas", 13, "bold"),
+                                        text_color=STATE_COLORS["standby"])
         self.state_pill.pack(side="right", padx=20)
-
-        self.time_label = ctk.CTkLabel(
-            self.header_frame, text="00:00:00",
-            font=("Consolas", 16, "bold"), text_color="#00d2ff"
-        )
+ 
+        self.date_label = ctk.CTkLabel(self.header_frame, text="--/--/----, ---", font=("Consolas", 13),
+                                        text_color="#7fd8ff")
+        self.date_label.pack(side="right", padx=20)
+ 
+        self.time_label = ctk.CTkLabel(self.header_frame, text="00:00:00", font=("Consolas", 16, "bold"),
+                                        text_color="#00d2ff")
         self.time_label.pack(side="right", padx=20, pady=10)
-
+ 
         # ---------------- BODY ----------------
         self.body_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.body_frame.pack(fill="both", expand=True, padx=15, pady=5)
-
-        # LEFT PANEL: SYSTEM DIAGNOSTICS
-        self.left_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00f0ff",
-                                        border_width=1, width=290)
+ 
+        # =========== LEFT PANEL: GAUGES + WEATHER ===========
+        self.left_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00e5ff",
+                                        border_width=1, width=300)
         self.left_panel.pack(side="left", fill="y", padx=(0, 10), pady=5)
         self.left_panel.pack_propagate(False)
-
+ 
         ctk.CTkLabel(self.left_panel, text="[ SYSTEM MONITOR ]", font=("Consolas", 14, "bold"),
-                     text_color="#00f0ff").pack(pady=15)
-
-        self.cpu_label = ctk.CTkLabel(self.left_panel, text="CPU USAGE: 0%", font=("Consolas", 12),
-                                       text_color="#a0e0ff")
-        self.cpu_label.pack(anchor="w", padx=20, pady=5)
-        self.cpu_bar = ctk.CTkProgressBar(self.left_panel, progress_color="#00f0ff", fg_color="#0d1b30")
-        self.cpu_bar.pack(fill="x", padx=20, pady=(0, 15))
-
-        self.ram_label = ctk.CTkLabel(self.left_panel, text="RAM USAGE: 0%", font=("Consolas", 12),
-                                       text_color="#a0e0ff")
-        self.ram_label.pack(anchor="w", padx=20, pady=5)
-        self.ram_bar = ctk.CTkProgressBar(self.left_panel, progress_color="#00f0ff", fg_color="#0d1b30")
-        self.ram_bar.pack(fill="x", padx=20, pady=(0, 15))
-
-        self.net_label = ctk.CTkLabel(self.left_panel, text="NET ACTIVITY", font=("Consolas", 12),
-                                       text_color="#a0e0ff")
-        self.net_label.pack(anchor="w", padx=20, pady=5)
-        self.net_bar = ctk.CTkProgressBar(self.left_panel, progress_color="#39ff14", fg_color="#0d1b30")
-        self.net_bar.pack(fill="x", padx=20, pady=(0, 15))
-        self.net_bar.set(0)
-
-        self.weather_label = ctk.CTkLabel(self.left_panel, text="WEATHER: Fetching...",
-                                           font=("Consolas", 12), text_color="#00d2ff", wraplength=240,
-                                           justify="left")
-        self.weather_label.pack(anchor="w", padx=20, pady=15)
-
-        ctk.CTkLabel(self.left_panel, text="[ MIC INPUT ]", font=("Consolas", 14, "bold"),
-                     text_color="#00f0ff").pack(pady=(20, 5))
-        self.mic_canvas = tk.Canvas(self.left_panel, width=240, height=60, bg="#071022",
+                     text_color="#00e5ff").pack(pady=(15, 5))
+ 
+        self.gauge_canvas = tk.Canvas(self.left_panel, width=270, height=270, bg="#071022",
+                                       highlightthickness=0)
+        self.gauge_canvas.pack(pady=5)
+ 
+        self.net_prev = psutil.net_io_counters()
+        self.net_speed_kbps = 0.0
+ 
+        ctk.CTkLabel(self.left_panel, text="[ WEATHER ]", font=("Consolas", 13, "bold"),
+                     text_color="#00e5ff").pack(pady=(15, 2))
+        self.weather_label = ctk.CTkLabel(self.left_panel, text="Fetching...", font=("Consolas", 13),
+                                           text_color="#7fd8ff", wraplength=260, justify="left")
+        self.weather_label.pack(pady=2)
+ 
+        ctk.CTkLabel(self.left_panel, text="[ MIC INPUT ]", font=("Consolas", 13, "bold"),
+                     text_color="#00e5ff").pack(pady=(20, 5))
+        self.mic_canvas = tk.Canvas(self.left_panel, width=260, height=55, bg="#071022",
                                      highlightthickness=0)
-        self.mic_canvas.pack(pady=5)
-
-        # CENTER PANEL: ARC REACTOR + CONSOLE
-        self.center_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00f0ff",
+        self.mic_canvas.pack(pady=2)
+ 
+        # =========== CENTER PANEL: REACTOR + LOG + HEX MENU ===========
+        self.center_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00e5ff",
                                           border_width=1)
         self.center_panel.pack(side="left", fill="both", expand=True, pady=5)
-
-        self.canvas = tk.Canvas(self.center_panel, width=240, height=240, bg="#071022",
+ 
+        self.canvas = tk.Canvas(self.center_panel, width=280, height=280, bg="#071022",
                                  highlightthickness=0)
-        self.canvas.pack(pady=(20, 10))
+        self.canvas.pack(pady=(15, 5))
         self.draw_static_reactor()
-
-        self.status_label = ctk.CTkLabel(
-            self.center_panel, text="INITIALIZING HUD...",
-            font=("Consolas", 14, "bold"), text_color="#00f0ff", wraplength=480
-        )
+ 
+        self.status_label = ctk.CTkLabel(self.center_panel, text="INITIALIZING HUD...",
+                                          font=("Consolas", 14, "bold"), text_color="#00e5ff", wraplength=520)
         self.status_label.pack(pady=(5, 2))
-
-        self.user_label = ctk.CTkLabel(
-            self.center_panel, text="",
-            font=("Consolas", 13, "italic"), text_color="#ffffff", wraplength=480
-        )
+ 
+        self.user_label = ctk.CTkLabel(self.center_panel, text="", font=("Consolas", 13, "italic"),
+                                        text_color="#ffffff", wraplength=520)
         self.user_label.pack(pady=2)
-
+ 
         ctk.CTkLabel(self.center_panel, text="[ SYSTEM LOG ]", font=("Consolas", 12, "bold"),
-                     text_color="#00f0ff").pack(pady=(15, 2))
+                     text_color="#00e5ff").pack(pady=(10, 2))
         self.console = ctk.CTkTextbox(self.center_panel, fg_color="#050d18", text_color="#66e0ff",
-                                       font=("Consolas", 11), border_color="#00f0ff", border_width=1)
-        self.console.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+                                       font=("Consolas", 11), border_color="#00e5ff", border_width=1, height=140)
+        self.console.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         self.console.configure(state="disabled")
-
-        # RIGHT PANEL: PROTOCOLS + STATE
-        self.right_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00f0ff",
-                                         border_width=1, width=230)
+ 
+        ctk.CTkLabel(self.center_panel, text="[ QUICK PROTOCOLS ]", font=("Consolas", 12, "bold"),
+                     text_color="#00e5ff").pack(pady=(0, 4))
+        self.hex_canvas = tk.Canvas(self.center_panel, width=560, height=110, bg="#071022",
+                                     highlightthickness=0)
+        self.hex_canvas.pack(pady=(0, 10))
+        self.build_hex_menu()
+ 
+        # Bottom status/power bar
+        self.status_bar = ctk.CTkLabel(self.center_panel, text="J.A.R.V.I.S. — ONLINE",
+                                        font=("Consolas", 12, "bold"), text_color=STATE_COLORS["standby"])
+        self.status_bar.pack(pady=(0, 10))
+ 
+        # =========== RIGHT PANEL: SUIT WIREFRAME + NEWS ===========
+        self.right_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00e5ff",
+                                         border_width=1, width=320)
         self.right_panel.pack(side="right", fill="y", padx=(10, 0), pady=5)
         self.right_panel.pack_propagate(False)
-
-        ctk.CTkLabel(self.right_panel, text="[ PROTOCOLS ]", font=("Consolas", 14, "bold"),
-                     text_color="#00f0ff").pack(pady=15)
-
-        ctk.CTkButton(self.right_panel, text="YOUTUBE", fg_color="transparent", border_color="#00f0ff",
-                      border_width=1, text_color="#00f0ff", hover_color="#0d1b30",
-                      command=lambda: webbrowser.open("https://www.youtube.com")).pack(fill="x", padx=15, pady=6)
-        ctk.CTkButton(self.right_panel, text="SPOTIFY", fg_color="transparent", border_color="#00f0ff",
-                      border_width=1, text_color="#00f0ff", hover_color="#0d1b30",
-                      command=lambda: webbrowser.open("https://open.spotify.com")).pack(fill="x", padx=15, pady=6)
-        ctk.CTkButton(self.right_panel, text="CALCULATOR", fg_color="transparent", border_color="#00f0ff",
-                      border_width=1, text_color="#00f0ff", hover_color="#0d1b30",
-                      command=lambda: os.system("calc")).pack(fill="x", padx=15, pady=6)
-        ctk.CTkButton(self.right_panel, text="VS CODE", fg_color="transparent", border_color="#00f0ff",
-                      border_width=1, text_color="#00f0ff", hover_color="#0d1b30",
-                      command=lambda: os.system("code")).pack(fill="x", padx=15, pady=6)
-
-        ctk.CTkLabel(self.right_panel, text="[ VOICE STATUS ]", font=("Consolas", 14, "bold"),
-                     text_color="#00f0ff").pack(pady=(25, 10))
-
-        self.state_rows = {}
-        for key in ["standby", "listening", "processing", "speaking"]:
-            row = ctk.CTkFrame(self.right_panel, fg_color="transparent")
-            row.pack(fill="x", padx=20, pady=4)
-            dot = ctk.CTkLabel(row, text="●", font=("Consolas", 14), text_color="#1b3a4a")
-            dot.pack(side="left")
-            lbl = ctk.CTkLabel(row, text=key.upper(), font=("Consolas", 11), text_color="#5b7d8c")
-            lbl.pack(side="left", padx=6)
-            self.state_rows[key] = (dot, lbl)
-
+ 
+        ctk.CTkLabel(self.right_panel, text="[ SYSTEMS ANALYSIS: MARK VII ]", font=("Consolas", 13, "bold"),
+                     text_color="#00e5ff").pack(pady=(15, 5))
+ 
+        self.suit_canvas = tk.Canvas(self.right_panel, width=280, height=320, bg="#071022",
+                                      highlightthickness=0)
+        self.suit_canvas.pack(pady=5)
+ 
+        self.armor_label = ctk.CTkLabel(self.right_panel, text="ARMOR INTEGRITY: 98%",
+                                         font=("Consolas", 13, "bold"), text_color="#00e5ff")
+        self.armor_label.pack(pady=(5, 15))
+ 
+        ctk.CTkLabel(self.right_panel, text="[ NETWORK FEED ]", font=("Consolas", 13, "bold"),
+                     text_color="#00e5ff").pack(pady=(0, 5))
+        self.news_label = ctk.CTkLabel(self.right_panel, text=NEWS_FEED[0], font=("Consolas", 11),
+                                        text_color="#7fd8ff", wraplength=280, justify="left")
+        self.news_label.pack(pady=2, padx=10)
+ 
         # Kick off animation loops
         self.update_telemetry()
         self.animate()
-
-    # ---------------- STATIC REACTOR ----------------
+        self.rotate_news()
+ 
+    # ---------------- STATIC REACTOR RINGS ----------------
     def draw_static_reactor(self):
-        self.canvas.create_oval(10, 10, 230, 230, outline="#00394a", width=2)
-        self.canvas.create_oval(35, 35, 205, 205, outline="#005577", width=1, dash=(3, 5))
-        self.canvas.create_oval(60, 60, 180, 180, outline="#00394a", width=1)
-
+        self.canvas.create_oval(10, 10, 270, 270, outline="#023241", width=1)
+        self.canvas.create_oval(30, 30, 250, 250, outline="#004a5f", width=1, dash=(2, 6))
+        self.canvas.create_oval(60, 60, 220, 220, outline="#023241", width=1)
+        # radial tick marks around outer ring
+        cx = cy = 140
+        for i in range(36):
+            ang = math.radians(i * 10)
+            x0 = cx + 132 * math.cos(ang)
+            y0 = cy + 132 * math.sin(ang)
+            x1 = cx + 122 * math.cos(ang)
+            y1 = cy + 122 * math.sin(ang)
+            self.canvas.create_line(x0, y0, x1, y1, fill="#023241")
+ 
+    # ---------------- HEX QUICK MENU ----------------
+    def build_hex_menu(self):
+        labels = ["DATABASE", "SECURITY", "ENVIRONMENT", "POWER", "COMMS"]
+        actions = [self.hex_database, self.hex_security, self.hex_environment,
+                   self.hex_power, self.hex_comms]
+        r = 34
+        spacing = 108
+        start_x = 60
+        cy = 40
+        self.hex_items = []
+        for i, (label, action) in enumerate(zip(labels, actions)):
+            cx = start_x + i * spacing
+            pts = []
+            for k in range(6):
+                ang = math.radians(60 * k - 30)
+                pts.extend([cx + r * math.cos(ang), cy + r * math.sin(ang)])
+            hexid = self.hex_canvas.create_polygon(pts, outline="#00e5ff", fill="#0a1a2c", width=2)
+            txtid = self.hex_canvas.create_text(cx, cy + r + 14, text=label, fill="#7fd8ff",
+                                                 font=("Consolas", 9, "bold"))
+            self.hex_canvas.tag_bind(hexid, "<Button-1>", lambda e, a=action: a())
+            self.hex_canvas.tag_bind(hexid, "<Enter>",
+                                      lambda e, h=hexid: self.hex_canvas.itemconfig(h, fill="#123048"))
+            self.hex_canvas.tag_bind(hexid, "<Leave>",
+                                      lambda e, h=hexid: self.hex_canvas.itemconfig(h, fill="#0a1a2c"))
+            self.hex_items.append(hexid)
+ 
+    def hex_database(self):
+        self.log("Accessing local database... records synced.")
+ 
+    def hex_security(self):
+        self.log("Security protocol engaged — locking workstation.")
+        threading.Thread(target=lock_workstation, daemon=True).start()
+ 
+    def hex_environment(self):
+        self.log("Environmental control: audio levels normalized to 50%.")
+        threading.Thread(target=lambda: set_volume(0.5), daemon=True).start()
+ 
+    def hex_power(self):
+        self.log(f"Power diagnostics: {get_battery_status()}")
+ 
+    def hex_comms(self):
+        self.log("Opening comms channel (mail client).")
+        webbrowser.open("https://mail.google.com")
+ 
     # ---------------- ANIMATION LOOP ----------------
     def animate(self):
         color = self.state_color
-
-        # rotating segmented ring
+ 
+        # rotating segmented rings (reactor)
         self.canvas.delete("rotating")
         for i in range(8):
             start = self.reactor_angle + i * 45
-            self.canvas.create_arc(45, 45, 195, 195, start=start, extent=22,
-                                    style="arc", outline=color, width=4, tags="rotating")
-        for i in range(12):
-            start = -self.reactor_angle * 1.5 + i * 30
-            self.canvas.create_arc(25, 25, 215, 215, start=start, extent=8,
+            self.canvas.create_arc(50, 50, 230, 230, start=start, extent=24,
+                                    style="arc", outline=color, width=5, tags="rotating")
+        for i in range(16):
+            start = -self.reactor_angle * 1.4 + i * 22.5
+            self.canvas.create_arc(35, 35, 245, 245, start=start, extent=7,
                                     style="arc", outline=color, width=2, tags="rotating")
-
-        # pulsing core
+ 
+        # pulsing triangular core
         self.canvas.delete("core")
-        pulse = 22 + 6 * math.sin(self.pulse_t)
-        cx, cy = 120, 120
-        self.canvas.create_oval(cx - pulse - 10, cy - pulse - 10, cx + pulse + 10, cy + pulse + 10,
+        pulse = 26 + 7 * math.sin(self.pulse_t)
+        cx, cy = 140, 140
+        self.canvas.create_oval(cx - pulse - 14, cy - pulse - 14, cx + pulse + 14, cy + pulse + 14,
                                  outline=color, width=1, tags="core")
         self.canvas.create_oval(cx - pulse, cy - pulse, cx + pulse, cy + pulse,
                                  fill=color, outline="", tags="core")
         self.canvas.create_polygon(
-            cx, cy - pulse * 0.6, cx - pulse * 0.5, cy + pulse * 0.4,
-            cx + pulse * 0.5, cy + pulse * 0.4,
+            cx, cy - pulse * 0.65, cx - pulse * 0.55, cy + pulse * 0.4,
+            cx + pulse * 0.55, cy + pulse * 0.4,
             fill="#02060d", outline="", tags="core"
         )
-
         self.reactor_angle = (self.reactor_angle + 3) % 360
         self.pulse_t += 0.12
-
+ 
         # mic bars
         self.mic_canvas.delete("bars")
         active = self.state_name == "listening"
-        width_per_bar = 240 / len(self.mic_bars)
+        width_per_bar = 260 / len(self.mic_bars)
         for i in range(len(self.mic_bars)):
-            target = random.randint(6, 50) if active else 4
+            target = random.randint(6, 46) if active else 4
             self.mic_bars[i] += (target - self.mic_bars[i]) * 0.5
             h = max(2, self.mic_bars[i])
-            x0 = i * width_per_bar + 4
-            x1 = x0 + width_per_bar - 6
-            y1 = 55
+            x0 = i * width_per_bar + 3
+            x1 = x0 + width_per_bar - 5
+            y1 = 50
             y0 = y1 - h
             bar_color = STATE_COLORS["listening"] if active else "#0d3040"
             self.mic_canvas.create_rectangle(x0, y0, x1, y1, fill=bar_color, outline="", tags="bars")
-
+ 
+        # suit wireframe glow pulse tied to state
+        self.draw_suit(color)
+ 
         self.after(45, self.animate)
-
+ 
+    # ---------------- CIRCULAR GAUGES ----------------
+    def draw_gauge(self, cx, cy, r, value_pct, color, label, value_text, tag):
+        self.gauge_canvas.delete(tag)
+        value_pct = max(0, min(100, value_pct))
+        # background arc (270 deg sweep, opening at bottom)
+        self.gauge_canvas.create_arc(cx - r, cy - r, cx + r, cy + r, start=225, extent=-270,
+                                      style="arc", outline="#0d3040", width=9, tags=tag)
+        # foreground value arc
+        sweep = -270 * (value_pct / 100)
+        self.gauge_canvas.create_arc(cx - r, cy - r, cx + r, cy + r, start=225, extent=sweep,
+                                      style="arc", outline=color, width=9, tags=tag)
+        self.gauge_canvas.create_text(cx, cy - 4, text=value_text, fill=color,
+                                       font=("Consolas", 13, "bold"), tags=tag)
+        self.gauge_canvas.create_text(cx, cy + 16, text=label, fill="#5b8fa8",
+                                       font=("Consolas", 9), tags=tag)
+ 
+    # ---------------- SUIT WIREFRAME ----------------
+    def draw_suit(self, color):
+        c = self.suit_canvas
+        c.delete("suit")
+        cx = 140
+        # head
+        c.create_oval(cx - 32, 15, cx + 32, 80, outline=color, width=2, tags="suit")
+        c.create_line(cx - 14, 42, cx - 4, 42, fill=color, width=3, tags="suit")  # eye L
+        c.create_line(cx + 4, 42, cx + 14, 42, fill=color, width=3, tags="suit")  # eye R
+        # neck
+        c.create_line(cx, 80, cx, 100, fill=color, width=2, tags="suit")
+        # shoulders / torso outline
+        c.create_line(cx, 100, cx - 90, 140, fill=color, width=2, tags="suit")
+        c.create_line(cx, 100, cx + 90, 140, fill=color, width=2, tags="suit")
+        c.create_line(cx - 90, 140, cx - 70, 250, fill=color, width=2, tags="suit")
+        c.create_line(cx + 90, 140, cx + 70, 250, fill=color, width=2, tags="suit")
+        c.create_line(cx - 70, 250, cx - 30, 290, fill=color, width=2, tags="suit")
+        c.create_line(cx + 70, 250, cx + 30, 290, fill=color, width=2, tags="suit")
+        c.create_line(cx - 30, 290, cx + 30, 290, fill=color, width=2, tags="suit")
+        # chest panel lines (pecs)
+        c.create_line(cx, 100, cx - 35, 175, fill=color, width=1, tags="suit")
+        c.create_line(cx, 100, cx + 35, 175, fill=color, width=1, tags="suit")
+        c.create_line(cx - 35, 175, cx, 210, fill=color, width=1, tags="suit")
+        c.create_line(cx + 35, 175, cx, 210, fill=color, width=1, tags="suit")
+        # chest arc-reactor glow
+        pulse = 6 + 3 * math.sin(self.pulse_t)
+        c.create_oval(cx - 14 - pulse, 150 - pulse, cx + 14 + pulse, 178 + pulse,
+                      outline=color, width=1, tags="suit")
+        c.create_oval(cx - 10, 154, cx + 10, 174, fill=color, outline="", tags="suit")
+        c.create_text(cx, 305, text="ONLINE", fill=color, font=("Consolas", 10, "bold"), tags="suit")
+ 
     # ---------------- TELEMETRY ----------------
     def update_telemetry(self):
-        current_time = time.strftime("%H:%M:%S")
-        self.time_label.configure(text=current_time)
-
+        now = time.localtime()
+        self.time_label.configure(text=time.strftime("%H:%M:%S", now))
+        self.date_label.configure(text=time.strftime("%d/%m/%Y, %A", now))
+ 
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
-        self.cpu_label.configure(text=f"CPU USAGE: {cpu}%")
-        self.cpu_bar.set(cpu / 100)
-
-        self.ram_label.configure(text=f"RAM USAGE: {ram}%")
-        self.ram_bar.set(ram / 100)
-
-        # lightweight simulated net-activity flicker so the panel feels alive
-        self.net_bar.set(random.uniform(0.05, 0.35))
-
+ 
+        net_now = psutil.net_io_counters()
+        bytes_delta = (net_now.bytes_sent + net_now.bytes_recv) - (self.net_prev.bytes_sent + self.net_prev.bytes_recv)
+        self.net_prev = net_now
+        self.net_speed_kbps = (bytes_delta / 1024)  # per ~1s tick
+        net_pct = min(100, self.net_speed_kbps / 5)  # scale for the dial (5 MB/s ~= full)
+ 
+        self.draw_gauge(65, 65, 55, cpu, "#00e5ff", "CPU", f"{cpu:.0f}%", "gauge_cpu")
+        self.draw_gauge(200, 65, 55, ram, "#ffb400" if ram > 85 else "#00e5ff", "RAM", f"{ram:.0f}%", "gauge_ram")
+        self.draw_gauge(65, 205, 55, net_pct, "#39ff14", "NET",
+                         f"{self.net_speed_kbps:.0f} KB/s", "gauge_net")
+ 
+        batt = get_battery_status()
+        batt_pct = 100
+        try:
+            b = psutil.sensors_battery()
+            if b:
+                batt_pct = b.percent
+        except Exception:
+            pass
+        self.draw_gauge(200, 205, 55, batt_pct, "#00e5ff", "BATTERY", batt, "gauge_batt")
+ 
         self.after(1000, self.update_telemetry)
-
+ 
+    def rotate_news(self):
+        self.news_index = (self.news_index + 1) % len(NEWS_FEED)
+        self.news_label.configure(text=NEWS_FEED[self.news_index])
+        self.after(4000, self.rotate_news)
+ 
     # ---------------- STATE / LOG HOOKS ----------------
     def set_state(self, state_name):
         if state_name not in STATE_COLORS:
@@ -458,21 +597,14 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.state_name = state_name
         self.state_color = STATE_COLORS[state_name]
         self.state_pill.configure(text=f"● {state_name.upper()}", text_color=self.state_color)
-
-        for key, (dot, lbl) in self.state_rows.items():
-            if key == state_name:
-                dot.configure(text_color=self.state_color)
-                lbl.configure(text_color="#ffffff")
-            else:
-                dot.configure(text_color="#1b3a4a")
-                lbl.configure(text_color="#5b7d8c")
-
+        self.status_bar.configure(text=f"J.A.R.V.I.S. — {state_name.upper()}", text_color=self.state_color)
+ 
     def update_status(self, text):
         self.status_label.configure(text=text)
-
+ 
     def update_user_text(self, text):
         self.user_label.configure(text=text)
-
+ 
     def log(self, text):
         timestamp = time.strftime("%H:%M:%S")
         self.log_lines.append(f"[{timestamp}] {text}")
@@ -482,15 +614,18 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.console.insert("end", "\n".join(self.log_lines))
         self.console.see("end")
         self.console.configure(state="disabled")
-
+ 
+ 
+# ==========================================
 # MAIN EXECUTION
+# ==========================================
 if __name__ == "__main__":
     app = AdvancedJarvisHUD()
     threading.Thread(target=jarvis_loop, daemon=True).start()
-
+ 
     def load_weather_bg():
         w = get_weather("Athens")
-        app.weather_label.configure(text=f"ATHENS: {w}")
+        app.weather_label.configure(text=f"ATHENS, GREECE\n{w}")
     threading.Thread(target=load_weather_bg, daemon=True).start()
-
+ 
     app.mainloop()
