@@ -93,3 +93,7 @@ if __name__ == "__main__":
                         speak_jarvis(response.text)
                 except Exception as e:
                     print(f"[Gemini Error]: {e}")
+                    if response and response.text:
+                        speak_jarvis(response.text)
+                except Exception as e:
+                    print(f"[Gemini Error]: {e}")
