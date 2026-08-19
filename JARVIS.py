@@ -83,3 +83,5 @@ if __name__ == "__main__":
                     speak_jarvis(response.text)
             except Exception as e:
                 print(f"[Gemini Error]: {e}")
+
+uv pip install pvporcupine pvrecorder edge-tts pygame google-genai speechrecognition --system
