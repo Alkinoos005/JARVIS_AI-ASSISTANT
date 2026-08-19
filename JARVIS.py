@@ -12,19 +12,21 @@ import customtkinter as ctk
 import tkinter as tk
 from google import genai
 
+# Για τον έλεγχο έντασης ήχου στα Windows
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-GEMINI_KEY = "ΤΟ_GEMINI_API_KEY_ΣΟΥ"
+GEMINI_KEY = ""
 client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
 # SYSTEM COMMANDS & FEATURES
 # ==========================================
 def set_volume(level):
+    """Αλλάζει την ένταση ήχου των Windows (level: 0.0 έως 1.0)"""
     try:
         devices = AudioUtilities.GetSpeakers()
         interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
@@ -36,6 +38,7 @@ def set_volume(level):
         return False
 
 def get_weather(city="Athens"):
+    """Παίρνει δωρεάν τα δεδομένα καιρού χωρίς API Key"""
     try:
         url = f"https://wttr.in/{city}?format=%C+%t"
         response = requests.get(url, timeout=3)
@@ -48,6 +51,7 @@ def get_weather(city="Athens"):
 def execute_system_command(command):
     cmd = command.lower()
     
+    # --- 1. Web & Applications ---
     if "youtube" in cmd:
         speak_jarvis("Opening YouTube for you, sir.")
         webbrowser.open("https://www.youtube.com")
@@ -69,6 +73,7 @@ def execute_system_command(command):
         os.system("calc")
         return True
 
+    # --- 2. Volume Control ---
     elif "mute" in cmd or "volume zero" in cmd:
         if set_volume(0.0):
             speak_jarvis("Audio muted, sir.")
@@ -82,6 +87,7 @@ def execute_system_command(command):
             speak_jarvis("Volume set to fifty percent, sir.")
         return True
 
+    # --- 3. Weather Forecast ---
     elif "weather" in cmd:
         weather_info = get_weather("Athens")
         speak_jarvis(f"The current weather status is {weather_info}, sir.")
@@ -132,7 +138,7 @@ def listen_for_audio(prompt_text=None):
             return None
 
 # ==========================================
-# CORE ASSISTANT LOGIC
+# CORE ASSISTANT LOGIC (Background Thread)
 # ==========================================
 def jarvis_loop():
     speak_jarvis("Systems initialized. Standing by for your instructions, sir.")
@@ -154,7 +160,9 @@ def jarvis_loop():
                     app.destroy()
                     break
                 
+                # Εκτέλεση τοπικής εντολής συστήματος
                 if not execute_system_command(cmd):
+                    # Gemini AI για γενικές ερωτήσεις
                     try:
                         response = client.models.generate_content(
                             model='gemini-2.5-flash',
