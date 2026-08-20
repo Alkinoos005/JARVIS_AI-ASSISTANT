@@ -1,32 +1,37 @@
 import os
+import re
+import ast
 import math
 import time
 import random
 import asyncio
+import operator
 import webbrowser
 import threading
+import xml.etree.ElementTree as ET
 import requests
 import psutil
+import pyautogui
 import edge_tts
 import pygame
 import speech_recognition as sr
 import customtkinter as ctk
 import tkinter as tk
 from google import genai
- 
+
 # Για τον έλεγχο έντασης ήχου στα Windows
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
- 
+
 # ==========================================
 # CONFIGURATION
 # ==========================================
 # NOTE: don't leave a real key hardcoded when you share/commit this file —
 # move it to an environment variable, e.g.:
 #   GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_KEY = " "
+GEMINI_KEY = ""
 client = genai.Client(api_key=GEMINI_KEY)
- 
+
 STATE_COLORS = {
     "standby":    "#00e5ff",   # electric blue
     "listening":  "#39ff14",   # green
@@ -34,7 +39,7 @@ STATE_COLORS = {
     "speaking":   "#00c8ff",   # bright blue
     "error":      "#ff3b3b",   # red / warning
 }
- 
+
 NEWS_FEED = [
     "STARK INDUSTRIES | Latest: Quantum Tunneling Data Uplink Stable",
     "MARK VII | Repulsor Calibration Nominal",
@@ -42,7 +47,7 @@ NEWS_FEED = [
     "R&D | New Alloy Stress Test Passed",
     "SATCOM | Orbital Uplink: 3 Satellites In Range",
 ]
- 
+
 # ==========================================
 # SYSTEM COMMANDS & FEATURES
 # ==========================================
@@ -57,8 +62,8 @@ def set_volume(level):
     except Exception as e:
         print(f"[Volume Error]: {e}")
         return False
- 
- 
+
+
 def get_weather(city="Athens"):
     """Παίρνει δωρεάν τα δεδομένα καιρού χωρίς API Key"""
     try:
@@ -69,8 +74,8 @@ def get_weather(city="Athens"):
     except Exception:
         pass
     return "N/A"
- 
- 
+
+
 def lock_workstation():
     try:
         os.system("rundll32.exe user32.dll,LockWorkStation")
@@ -78,8 +83,8 @@ def lock_workstation():
     except Exception as e:
         print(f"[Lock Error]: {e}")
         return False
- 
- 
+
+
 def get_battery_status():
     try:
         batt = psutil.sensors_battery()
@@ -89,11 +94,157 @@ def get_battery_status():
         return f"{int(batt.percent)}%  ({plugged})"
     except Exception:
         return "N/A"
- 
- 
+
+
+def wiki_summary(topic):
+    """Σύντομη περίληψη από τη Wikipedia (χωρίς API key)."""
+    try:
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(topic)}"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            extract = data.get("extract")
+            if extract:
+                # keep it speakable — first 2 sentences
+                sentences = extract.split(". ")
+                return ". ".join(sentences[:2]).rstrip(".") + "."
+        return f"I couldn't find a clear summary on {topic}, sir."
+    except Exception:
+        return "I couldn't reach Wikipedia right now, sir."
+
+
+def get_public_ip():
+    try:
+        return requests.get("https://api.ipify.org", timeout=5).text.strip()
+    except Exception:
+        return "unavailable"
+
+
+def take_screenshot():
+    try:
+        filename = f"screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png"
+        img = pyautogui.screenshot()
+        img.save(filename)
+        return filename
+    except Exception as e:
+        print(f"[Screenshot Error]: {e}")
+        return None
+
+
+def switch_window():
+    try:
+        pyautogui.keyDown("alt")
+        pyautogui.press("tab")
+        time.sleep(0.3)
+        pyautogui.keyUp("alt")
+        return True
+    except Exception as e:
+        print(f"[Switch Window Error]: {e}")
+        return False
+
+
+# --- Safe arithmetic calculator (no eval() on raw text) ---
+_CALC_WORDS = {
+    "plus": "+", "add": "+", "minus": "-", "subtract": "-",
+    "times": "*", "multiplied by": "*", "multiply": "*",
+    "divided by": "/", "divide": "/", "over": "/",
+}
+_ALLOWED_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub,
+    ast.Mult: operator.mul, ast.Div: operator.truediv,
+    ast.USub: operator.neg,
+}
+
+
+def _safe_eval(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_OPS:
+        return _ALLOWED_OPS[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_OPS:
+        return _ALLOWED_OPS[type(node.op)](_safe_eval(node.operand))
+    raise ValueError("Unsupported expression")
+
+
+def safe_calculate(expression_text):
+    text = expression_text.lower()
+    for word, symbol in _CALC_WORDS.items():
+        text = text.replace(word, f" {symbol} ")
+    text = re.sub(r"[^0-9\.\+\-\*/\(\)\s]", "", text)
+    try:
+        tree = ast.parse(text, mode="eval")
+        result = _safe_eval(tree.body)
+        return result
+    except Exception:
+        return None
+
+
+def geocode_place(place):
+    """OpenStreetMap Nominatim — free, no API key. Requires a descriptive User-Agent."""
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": place, "format": "json", "limit": 1},
+            headers={"User-Agent": "JarvisPersonalAssistant/1.0"},
+            timeout=5,
+        )
+        data = r.json()
+        if data:
+            return float(data[0]["lat"]), float(data[0]["lon"]), data[0].get("display_name", place)
+    except Exception:
+        pass
+    return None
+
+
+def get_current_location():
+    """Approximate location from public IP — free, no API key."""
+    try:
+        r = requests.get("https://ipapi.co/json/", timeout=5)
+        data = r.json()
+        return data.get("latitude"), data.get("longitude"), data.get("city", "your area")
+    except Exception:
+        return None
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def fetch_news(limit=5):
+    """Google News RSS — free, no API key needed."""
+    try:
+        r = requests.get("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", timeout=5)
+        root = ET.fromstring(r.content)
+        titles = [item.find("title").text for item in root.iter("item")][:limit]
+        return titles
+    except Exception:
+        return []
+
+
+NOTES_FILE = "jarvis_notes.txt"
+
+
+def add_note(text):
+    with open(NOTES_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{time.strftime('%Y-%m-%d %H:%M')}] {text}\n")
+
+
+def read_notes(limit=3):
+    if not os.path.exists(NOTES_FILE):
+        return []
+    with open(NOTES_FILE, "r", encoding="utf-8") as f:
+        lines = [l.strip() for l in f.readlines() if l.strip()]
+    return lines[-limit:]
+
+
 def execute_system_command(command):
     cmd = command.lower()
- 
+
     # --- 1. Web & Applications ---
     if "youtube" in cmd:
         speak_jarvis("Opening YouTube for you, sir.")
@@ -119,7 +270,7 @@ def execute_system_command(command):
         speak_jarvis("Locking the workstation, sir.")
         lock_workstation()
         return True
- 
+
     # --- 2. Volume Control ---
     elif "mute" in cmd or "volume zero" in cmd:
         if set_volume(0.0):
@@ -133,21 +284,112 @@ def execute_system_command(command):
         if set_volume(0.5):
             speak_jarvis("Volume set to fifty percent, sir.")
         return True
- 
+
     # --- 3. Weather Forecast ---
     elif "weather" in cmd:
         weather_info = get_weather("Athens")
         speak_jarvis(f"The current weather status is {weather_info}, sir.")
         return True
- 
+
     # --- 4. Battery ---
     elif "battery" in cmd or "power level" in cmd:
         speak_jarvis(f"Power status: {get_battery_status()}, sir.")
         return True
- 
+
+    # --- 5. Wikipedia / "tell me about X" ---
+    elif "tell me about" in cmd or "wikipedia" in cmd:
+        topic = cmd.split("about", 1)[-1].strip() if "about" in cmd else cmd.replace("wikipedia", "").strip()
+        speak_jarvis(wiki_summary(topic))
+        return True
+
+    # --- 6. Public IP ---
+    elif "ip address" in cmd:
+        speak_jarvis(f"Your public IP address is {get_public_ip()}, sir.")
+        return True
+
+    # --- 7. Screenshot ---
+    elif "screenshot" in cmd or "capture the screen" in cmd:
+        filename = take_screenshot()
+        if filename:
+            speak_jarvis(f"Screenshot captured and saved as {filename}, sir.")
+        else:
+            speak_jarvis("I couldn't capture the screen, sir.")
+        return True
+
+    # --- 8. Switch window ---
+    elif "switch window" in cmd or "switch the window" in cmd or "alt tab" in cmd:
+        speak_jarvis("Switching windows, sir.")
+        switch_window()
+        return True
+
+    # --- 9. Calculator ---
+    elif "calculate" in cmd:
+        result = safe_calculate(cmd.replace("calculate", ""))
+        if result is not None:
+            speak_jarvis(f"That comes to {result}, sir.")
+        else:
+            speak_jarvis("I couldn't parse that calculation, sir.")
+        return True
+
+    # --- 10. Location: "where is X" ---
+    elif cmd.startswith("where is"):
+        place = cmd.replace("where is", "", 1).strip()
+        geo = geocode_place(place)
+        here = get_current_location()
+        if geo and here:
+            lat, lon, name = geo
+            hlat, hlon, hcity = here
+            dist = haversine_km(hlat, hlon, lat, lon)
+            speak_jarvis(f"{place} is roughly {dist:.0f} kilometers from {hcity}, sir.")
+        else:
+            speak_jarvis(f"I couldn't locate {place}, sir.")
+        return True
+
+    # --- 11. News headlines ---
+    elif "news" in cmd or "headlines" in cmd:
+        headlines = fetch_news(5)
+        if headlines:
+            speak_jarvis("Here are today's top headlines, sir.")
+            for title in headlines:
+                speak_jarvis(title)
+        else:
+            speak_jarvis("I couldn't reach the news feed right now, sir.")
+        return True
+
+    # --- 12. Notes ---
+    elif "make a note" in cmd or "remember this" in cmd or "write this down" in cmd:
+        speak_jarvis("What would you like me to note down, sir?")
+        note_text = listen_for_audio("LISTENING FOR NOTE...", listening_state=True)
+        if note_text:
+            add_note(note_text)
+            speak_jarvis("Noted, sir.")
+        else:
+            speak_jarvis("I didn't catch that, sir.")
+        return True
+
+    elif "read my notes" in cmd or "read notes" in cmd:
+        notes = read_notes(3)
+        if notes:
+            speak_jarvis("Here are your most recent notes, sir.")
+            for n in notes:
+                speak_jarvis(n)
+        else:
+            speak_jarvis("You don't have any notes yet, sir.")
+        return True
+
+    # --- 13. Jokes ---
+    elif "joke" in cmd:
+        jokes = [
+            "Why do programmers prefer dark mode? Because light attracts bugs, sir.",
+            "I would tell you a UDP joke, but you might not get it, sir.",
+            "There are only 10 types of people, sir — those who understand binary and those who don't.",
+        ]
+        speak_jarvis(random.choice(jokes))
+        return True
+
     return False
- 
- 
+
+
 # ==========================================
 # VOICE SYNTHESIS (Monotone British Tone)
 # ==========================================
@@ -156,8 +398,8 @@ async def generate_speech(text):
         text, "en-GB-RyanNeural", rate="-12%", pitch="-8Hz"
     )
     await communicate.save("jarvis_voice.mp3")
- 
- 
+
+
 def speak_jarvis(text):
     if hasattr(app, "update_status"):
         app.update_status(f"JARVIS: {text}")
@@ -165,23 +407,23 @@ def speak_jarvis(text):
         app.log(f"JARVIS: {text}")
     if hasattr(app, "set_state"):
         app.set_state("speaking")
- 
+
     asyncio.run(generate_speech(text))
- 
+
     pygame.mixer.init()
     pygame.mixer.music.load("jarvis_voice.mp3")
     pygame.mixer.music.play()
     while pygame.mixer.music.get_busy():
         pygame.time.Clock().tick(10)
     pygame.mixer.quit()
- 
+
     if os.path.exists("jarvis_voice.mp3"):
         os.remove("jarvis_voice.mp3")
- 
+
     if hasattr(app, "set_state"):
         app.set_state("standby")
- 
- 
+
+
 # ==========================================
 # SPEECH RECOGNITION (STT)
 # ==========================================
@@ -190,7 +432,7 @@ def listen_for_audio(prompt_text=None, listening_state=False):
         app.update_status(prompt_text)
     if listening_state and hasattr(app, "set_state"):
         app.set_state("listening")
- 
+
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         recognizer.adjust_for_ambient_noise(source, duration=0.2)
@@ -205,8 +447,8 @@ def listen_for_audio(prompt_text=None, listening_state=False):
         finally:
             if listening_state and hasattr(app, "set_state"):
                 app.set_state("standby")
- 
- 
+
+
 # ==========================================
 # CORE ASSISTANT LOGIC (Background Thread)
 # ==========================================
@@ -214,26 +456,26 @@ def jarvis_loop():
     speak_jarvis("Systems initialized. Standing by for your instructions, sir.")
     app.update_status("STANDBY: Say 'Jarvis' to activate...")
     app.set_state("standby")
- 
+
     while True:
         wake_input = listen_for_audio()
- 
+
         if wake_input and "jarvis" in wake_input.lower():
             speak_jarvis("At your service, sir.")
- 
+
             user_command = listen_for_audio("LISTENING FOR COMMAND...", listening_state=True)
             if user_command:
                 app.update_user_text(f"You: {user_command}")
                 app.log(f"You: {user_command}")
                 cmd = user_command.lower()
- 
+
                 if "exit" in cmd or "quit" in cmd:
                     speak_jarvis("Shutting down systems. Have a good day, sir.")
                     app.destroy()
                     break
- 
+
                 app.set_state("processing")
- 
+
                 if not execute_system_command(cmd):
                     try:
                         response = client.models.generate_content(
@@ -252,25 +494,25 @@ def jarvis_loop():
                     except Exception:
                         app.set_state("error")
                         speak_jarvis("I seem to have encountered a temporary glitch, sir.")
- 
+
             app.update_status("STANDBY: Say 'Jarvis' to activate...")
             app.set_state("standby")
- 
+
         time.sleep(0.1)
- 
- 
+
+
 # ==========================================
 # ADVANCED STARK HUD INTERFACE
 # ==========================================
 class AdvancedJarvisHUD(ctk.CTk):
     def __init__(self):
         super().__init__()
- 
+
         self.title("J.A.R.V.I.S. MARK VII SYSTEM INTERFACE")
         self.geometry("1400x820")
         self.configure(fg_color="#02060d")
         ctk.set_appearance_mode("dark")
- 
+
         self.state_name = "standby"
         self.state_color = STATE_COLORS["standby"]
         self.reactor_angle = 0
@@ -278,124 +520,124 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.mic_bars = [4] * 14
         self.log_lines = []
         self.news_index = 0
- 
+
         # ---------------- HEADER ----------------
         self.header_frame = ctk.CTkFrame(self, fg_color="#071022", border_color="#00e5ff",
                                           border_width=1, corner_radius=10)
         self.header_frame.pack(fill="x", padx=15, pady=(15, 5))
- 
+
         ctk.CTkLabel(self.header_frame, text="STARK INDUSTRIES  //  J.A.R.V.I.S. HUD INTERFACE",
                      font=("Consolas", 18, "bold"), text_color="#00e5ff").pack(side="left", padx=20, pady=10)
- 
+
         self.state_pill = ctk.CTkLabel(self.header_frame, text="● STANDBY", font=("Consolas", 13, "bold"),
                                         text_color=STATE_COLORS["standby"])
         self.state_pill.pack(side="right", padx=20)
- 
+
         self.date_label = ctk.CTkLabel(self.header_frame, text="--/--/----, ---", font=("Consolas", 13),
                                         text_color="#7fd8ff")
         self.date_label.pack(side="right", padx=20)
- 
+
         self.time_label = ctk.CTkLabel(self.header_frame, text="00:00:00", font=("Consolas", 16, "bold"),
                                         text_color="#00d2ff")
         self.time_label.pack(side="right", padx=20, pady=10)
- 
+
         # ---------------- BODY ----------------
         self.body_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.body_frame.pack(fill="both", expand=True, padx=15, pady=5)
- 
+
         # =========== LEFT PANEL: GAUGES + WEATHER ===========
         self.left_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00e5ff",
                                         border_width=1, width=300)
         self.left_panel.pack(side="left", fill="y", padx=(0, 10), pady=5)
         self.left_panel.pack_propagate(False)
- 
+
         ctk.CTkLabel(self.left_panel, text="[ SYSTEM MONITOR ]", font=("Consolas", 14, "bold"),
                      text_color="#00e5ff").pack(pady=(15, 5))
- 
+
         self.gauge_canvas = tk.Canvas(self.left_panel, width=270, height=270, bg="#071022",
                                        highlightthickness=0)
         self.gauge_canvas.pack(pady=5)
- 
+
         self.net_prev = psutil.net_io_counters()
         self.net_speed_kbps = 0.0
- 
+
         ctk.CTkLabel(self.left_panel, text="[ WEATHER ]", font=("Consolas", 13, "bold"),
                      text_color="#00e5ff").pack(pady=(15, 2))
         self.weather_label = ctk.CTkLabel(self.left_panel, text="Fetching...", font=("Consolas", 13),
                                            text_color="#7fd8ff", wraplength=260, justify="left")
         self.weather_label.pack(pady=2)
- 
+
         ctk.CTkLabel(self.left_panel, text="[ MIC INPUT ]", font=("Consolas", 13, "bold"),
                      text_color="#00e5ff").pack(pady=(20, 5))
         self.mic_canvas = tk.Canvas(self.left_panel, width=260, height=55, bg="#071022",
                                      highlightthickness=0)
         self.mic_canvas.pack(pady=2)
- 
+
         # =========== CENTER PANEL: REACTOR + LOG + HEX MENU ===========
         self.center_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00e5ff",
                                           border_width=1)
         self.center_panel.pack(side="left", fill="both", expand=True, pady=5)
- 
+
         self.canvas = tk.Canvas(self.center_panel, width=280, height=280, bg="#071022",
                                  highlightthickness=0)
         self.canvas.pack(pady=(15, 5))
         self.draw_static_reactor()
- 
+
         self.status_label = ctk.CTkLabel(self.center_panel, text="INITIALIZING HUD...",
                                           font=("Consolas", 14, "bold"), text_color="#00e5ff", wraplength=520)
         self.status_label.pack(pady=(5, 2))
- 
+
         self.user_label = ctk.CTkLabel(self.center_panel, text="", font=("Consolas", 13, "italic"),
                                         text_color="#ffffff", wraplength=520)
         self.user_label.pack(pady=2)
- 
+
         ctk.CTkLabel(self.center_panel, text="[ SYSTEM LOG ]", font=("Consolas", 12, "bold"),
                      text_color="#00e5ff").pack(pady=(10, 2))
         self.console = ctk.CTkTextbox(self.center_panel, fg_color="#050d18", text_color="#66e0ff",
                                        font=("Consolas", 11), border_color="#00e5ff", border_width=1, height=140)
         self.console.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         self.console.configure(state="disabled")
- 
+
         ctk.CTkLabel(self.center_panel, text="[ QUICK PROTOCOLS ]", font=("Consolas", 12, "bold"),
                      text_color="#00e5ff").pack(pady=(0, 4))
-        self.hex_canvas = tk.Canvas(self.center_panel, width=560, height=110, bg="#071022",
+        self.hex_canvas = tk.Canvas(self.center_panel, width=660, height=110, bg="#071022",
                                      highlightthickness=0)
         self.hex_canvas.pack(pady=(0, 10))
         self.build_hex_menu()
- 
+
         # Bottom status/power bar
         self.status_bar = ctk.CTkLabel(self.center_panel, text="J.A.R.V.I.S. — ONLINE",
                                         font=("Consolas", 12, "bold"), text_color=STATE_COLORS["standby"])
         self.status_bar.pack(pady=(0, 10))
- 
+
         # =========== RIGHT PANEL: SUIT WIREFRAME + NEWS ===========
         self.right_panel = ctk.CTkFrame(self.body_frame, fg_color="#071022", border_color="#00e5ff",
                                          border_width=1, width=320)
         self.right_panel.pack(side="right", fill="y", padx=(10, 0), pady=5)
         self.right_panel.pack_propagate(False)
- 
+
         ctk.CTkLabel(self.right_panel, text="[ SYSTEMS ANALYSIS: MARK VII ]", font=("Consolas", 13, "bold"),
                      text_color="#00e5ff").pack(pady=(15, 5))
- 
+
         self.suit_canvas = tk.Canvas(self.right_panel, width=280, height=320, bg="#071022",
                                       highlightthickness=0)
         self.suit_canvas.pack(pady=5)
- 
+
         self.armor_label = ctk.CTkLabel(self.right_panel, text="ARMOR INTEGRITY: 98%",
                                          font=("Consolas", 13, "bold"), text_color="#00e5ff")
         self.armor_label.pack(pady=(5, 15))
- 
+
         ctk.CTkLabel(self.right_panel, text="[ NETWORK FEED ]", font=("Consolas", 13, "bold"),
                      text_color="#00e5ff").pack(pady=(0, 5))
         self.news_label = ctk.CTkLabel(self.right_panel, text=NEWS_FEED[0], font=("Consolas", 11),
                                         text_color="#7fd8ff", wraplength=280, justify="left")
         self.news_label.pack(pady=2, padx=10)
- 
+
         # Kick off animation loops
         self.update_telemetry()
         self.animate()
         self.rotate_news()
- 
+
     # ---------------- STATIC REACTOR RINGS ----------------
     def draw_static_reactor(self):
         self.canvas.create_oval(10, 10, 270, 270, outline="#023241", width=1)
@@ -410,12 +652,12 @@ class AdvancedJarvisHUD(ctk.CTk):
             x1 = cx + 122 * math.cos(ang)
             y1 = cy + 122 * math.sin(ang)
             self.canvas.create_line(x0, y0, x1, y1, fill="#023241")
- 
+
     # ---------------- HEX QUICK MENU ----------------
     def build_hex_menu(self):
-        labels = ["DATABASE", "SECURITY", "ENVIRONMENT", "POWER", "COMMS"]
+        labels = ["DATABASE", "SECURITY", "ENVIRONMENT", "POWER", "COMMS", "NEWS"]
         actions = [self.hex_database, self.hex_security, self.hex_environment,
-                   self.hex_power, self.hex_comms]
+                   self.hex_power, self.hex_comms, self.hex_news]
         r = 34
         spacing = 108
         start_x = 60
@@ -436,29 +678,41 @@ class AdvancedJarvisHUD(ctk.CTk):
             self.hex_canvas.tag_bind(hexid, "<Leave>",
                                       lambda e, h=hexid: self.hex_canvas.itemconfig(h, fill="#0a1a2c"))
             self.hex_items.append(hexid)
- 
+
     def hex_database(self):
         self.log("Accessing local database... records synced.")
- 
+
     def hex_security(self):
         self.log("Security protocol engaged — locking workstation.")
         threading.Thread(target=lock_workstation, daemon=True).start()
- 
+
     def hex_environment(self):
         self.log("Environmental control: audio levels normalized to 50%.")
         threading.Thread(target=lambda: set_volume(0.5), daemon=True).start()
- 
+
     def hex_power(self):
         self.log(f"Power diagnostics: {get_battery_status()}")
- 
+
     def hex_comms(self):
         self.log("Opening comms channel (mail client).")
         webbrowser.open("https://mail.google.com")
- 
+
+    def hex_news(self):
+        self.log("Pulling latest headlines...")
+
+        def _fetch():
+            headlines = fetch_news(5)
+            if headlines:
+                for h in headlines:
+                    self.log(f"NEWS: {h}")
+            else:
+                self.log("News feed unavailable.")
+        threading.Thread(target=_fetch, daemon=True).start()
+
     # ---------------- ANIMATION LOOP ----------------
     def animate(self):
         color = self.state_color
- 
+
         # rotating segmented rings (reactor)
         self.canvas.delete("rotating")
         for i in range(8):
@@ -469,7 +723,7 @@ class AdvancedJarvisHUD(ctk.CTk):
             start = -self.reactor_angle * 1.4 + i * 22.5
             self.canvas.create_arc(35, 35, 245, 245, start=start, extent=7,
                                     style="arc", outline=color, width=2, tags="rotating")
- 
+
         # pulsing triangular core
         self.canvas.delete("core")
         pulse = 26 + 7 * math.sin(self.pulse_t)
@@ -485,7 +739,7 @@ class AdvancedJarvisHUD(ctk.CTk):
         )
         self.reactor_angle = (self.reactor_angle + 3) % 360
         self.pulse_t += 0.12
- 
+
         # mic bars
         self.mic_canvas.delete("bars")
         active = self.state_name == "listening"
@@ -500,12 +754,12 @@ class AdvancedJarvisHUD(ctk.CTk):
             y0 = y1 - h
             bar_color = STATE_COLORS["listening"] if active else "#0d3040"
             self.mic_canvas.create_rectangle(x0, y0, x1, y1, fill=bar_color, outline="", tags="bars")
- 
+
         # suit wireframe glow pulse tied to state
         self.draw_suit(color)
- 
+
         self.after(45, self.animate)
- 
+
     # ---------------- CIRCULAR GAUGES ----------------
     def draw_gauge(self, cx, cy, r, value_pct, color, label, value_text, tag):
         self.gauge_canvas.delete(tag)
@@ -521,7 +775,7 @@ class AdvancedJarvisHUD(ctk.CTk):
                                        font=("Consolas", 13, "bold"), tags=tag)
         self.gauge_canvas.create_text(cx, cy + 16, text=label, fill="#5b8fa8",
                                        font=("Consolas", 9), tags=tag)
- 
+
     # ---------------- SUIT WIREFRAME ----------------
     def draw_suit(self, color):
         c = self.suit_canvas
@@ -552,27 +806,27 @@ class AdvancedJarvisHUD(ctk.CTk):
                       outline=color, width=1, tags="suit")
         c.create_oval(cx - 10, 154, cx + 10, 174, fill=color, outline="", tags="suit")
         c.create_text(cx, 305, text="ONLINE", fill=color, font=("Consolas", 10, "bold"), tags="suit")
- 
+
     # ---------------- TELEMETRY ----------------
     def update_telemetry(self):
         now = time.localtime()
         self.time_label.configure(text=time.strftime("%H:%M:%S", now))
         self.date_label.configure(text=time.strftime("%d/%m/%Y, %A", now))
- 
+
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
- 
+
         net_now = psutil.net_io_counters()
         bytes_delta = (net_now.bytes_sent + net_now.bytes_recv) - (self.net_prev.bytes_sent + self.net_prev.bytes_recv)
         self.net_prev = net_now
         self.net_speed_kbps = (bytes_delta / 1024)  # per ~1s tick
         net_pct = min(100, self.net_speed_kbps / 5)  # scale for the dial (5 MB/s ~= full)
- 
+
         self.draw_gauge(65, 65, 55, cpu, "#00e5ff", "CPU", f"{cpu:.0f}%", "gauge_cpu")
         self.draw_gauge(200, 65, 55, ram, "#ffb400" if ram > 85 else "#00e5ff", "RAM", f"{ram:.0f}%", "gauge_ram")
         self.draw_gauge(65, 205, 55, net_pct, "#39ff14", "NET",
                          f"{self.net_speed_kbps:.0f} KB/s", "gauge_net")
- 
+
         batt = get_battery_status()
         batt_pct = 100
         try:
@@ -582,14 +836,14 @@ class AdvancedJarvisHUD(ctk.CTk):
         except Exception:
             pass
         self.draw_gauge(200, 205, 55, batt_pct, "#00e5ff", "BATTERY", batt, "gauge_batt")
- 
+
         self.after(1000, self.update_telemetry)
- 
+
     def rotate_news(self):
         self.news_index = (self.news_index + 1) % len(NEWS_FEED)
         self.news_label.configure(text=NEWS_FEED[self.news_index])
         self.after(4000, self.rotate_news)
- 
+
     # ---------------- STATE / LOG HOOKS ----------------
     def set_state(self, state_name):
         if state_name not in STATE_COLORS:
@@ -598,13 +852,13 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.state_color = STATE_COLORS[state_name]
         self.state_pill.configure(text=f"● {state_name.upper()}", text_color=self.state_color)
         self.status_bar.configure(text=f"J.A.R.V.I.S. — {state_name.upper()}", text_color=self.state_color)
- 
+
     def update_status(self, text):
         self.status_label.configure(text=text)
- 
+
     def update_user_text(self, text):
         self.user_label.configure(text=text)
- 
+
     def log(self, text):
         timestamp = time.strftime("%H:%M:%S")
         self.log_lines.append(f"[{timestamp}] {text}")
@@ -614,18 +868,18 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.console.insert("end", "\n".join(self.log_lines))
         self.console.see("end")
         self.console.configure(state="disabled")
- 
- 
+
+
 # ==========================================
 # MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
     app = AdvancedJarvisHUD()
     threading.Thread(target=jarvis_loop, daemon=True).start()
- 
+
     def load_weather_bg():
         w = get_weather("Athens")
         app.weather_label.configure(text=f"ATHENS, GREECE\n{w}")
     threading.Thread(target=load_weather_bg, daemon=True).start()
- 
+
     app.mainloop()
