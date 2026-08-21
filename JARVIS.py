@@ -761,7 +761,7 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.after(45, self.animate)
 
     # ---------------- CIRCULAR GAUGES ----------------
-    def draw_gauge(self, cx, cy, r, value_pct, color, label, value_text, tag):
+    def draw_gauge(self, cx, cy, r, value_pct, color, label, value_text, tag, sub_text=None):
         self.gauge_canvas.delete(tag)
         value_pct = max(0, min(100, value_pct))
         # background arc (270 deg sweep, opening at bottom)
@@ -771,9 +771,16 @@ class AdvancedJarvisHUD(ctk.CTk):
         sweep = -270 * (value_pct / 100)
         self.gauge_canvas.create_arc(cx - r, cy - r, cx + r, cy + r, start=225, extent=sweep,
                                       style="arc", outline=color, width=9, tags=tag)
-        self.gauge_canvas.create_text(cx, cy - 4, text=value_text, fill=color,
-                                       font=("Consolas", 13, "bold"), tags=tag)
-        self.gauge_canvas.create_text(cx, cy + 16, text=label, fill="#5b8fa8",
+        # shrink the font automatically if the value text is long, so it never spills
+        # out of the dial into a neighboring gauge
+        font_size = 13 if len(value_text) <= 4 else (11 if len(value_text) <= 7 else 9)
+        value_y = cy - 6 if sub_text else cy - 4
+        self.gauge_canvas.create_text(cx, value_y, text=value_text, fill=color,
+                                       font=("Consolas", font_size, "bold"), tags=tag)
+        if sub_text:
+            self.gauge_canvas.create_text(cx, cy + 8, text=sub_text, fill=color,
+                                           font=("Consolas", 8, "bold"), tags=tag)
+        self.gauge_canvas.create_text(cx, cy + 22, text=label, fill="#5b8fa8",
                                        font=("Consolas", 9), tags=tag)
 
     # ---------------- SUIT WIREFRAME ----------------
@@ -825,17 +832,19 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.draw_gauge(65, 65, 55, cpu, "#00e5ff", "CPU", f"{cpu:.0f}%", "gauge_cpu")
         self.draw_gauge(200, 65, 55, ram, "#ffb400" if ram > 85 else "#00e5ff", "RAM", f"{ram:.0f}%", "gauge_ram")
         self.draw_gauge(65, 205, 55, net_pct, "#39ff14", "NET",
-                         f"{self.net_speed_kbps:.0f} KB/s", "gauge_net")
+                         f"{self.net_speed_kbps:.0f}", "gauge_net", sub_text="KB/s")
 
-        batt = get_battery_status()
         batt_pct = 100
+        charging = None
         try:
             b = psutil.sensors_battery()
             if b:
                 batt_pct = b.percent
+                charging = "CHG" if b.power_plugged else "BATT"
         except Exception:
             pass
-        self.draw_gauge(200, 205, 55, batt_pct, "#00e5ff", "BATTERY", batt, "gauge_batt")
+        self.draw_gauge(200, 205, 55, batt_pct, "#00e5ff", "BATTERY",
+                         f"{batt_pct:.0f}%", "gauge_batt", sub_text=charging)
 
         self.after(1000, self.update_telemetry)
 
