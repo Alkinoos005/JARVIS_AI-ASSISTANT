@@ -57,7 +57,6 @@ except ImportError:
     HAS_BS4 = False
 
 # The PyPI package was renamed from `duckduckgo_search` to `ddgs` in 2025.
-# Try the new name first, fall back to the old one so this works either way.
 try:
     from ddgs import DDGS
     HAS_DDGS = True
@@ -68,11 +67,29 @@ except ImportError:
     except ImportError:
         HAS_DDGS = False
 
+# Coqui XTTS for real voice cloning from your jarvis_voice sample
+HAS_XTTS = False
+xtts_model = None
+try:
+    from TTS.api import TTS as CoquiTTS
+    HAS_XTTS = True
+except ImportError:
+    pass
+
+# Path to your voice sample (put the mp3 next to this script)
+VOICE_SAMPLE_CANDIDATES = [
+    "jarvis_voice_sample.mp3",
+    "jarvis_voice.mp3",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_voice_sample.mp3"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_voice.mp3"),
+]
+VOICE_SAMPLE = next((p for p in VOICE_SAMPLE_CANDIDATES if os.path.exists(p)), None)
+
 # ==========================================
 # CONFIG
 # ==========================================
 # Prefer environment variable. Fallback to the key you used before so it works out of the box.
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or " "
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or "AQ.Ab8RN6Jb5NydIidweWO2ClncMCYDhjwXs33ESQrR5Rg3glGtTw"
 
 try:
     client = genai.Client(api_key=GEMINI_KEY)
@@ -566,8 +583,44 @@ def execute_system_command(command: str) -> bool:
 
 
 # ==========================================
-# VOICE  (unique temp files → no Permission-denied on Windows)
+# VOICE — XTTS clone of your sample + edge-tts fallback
 # ==========================================
+def _init_xtts():
+    """Lazy-load the XTTS model once (first call downloads ~2GB if needed)."""
+    global xtts_model
+    if xtts_model is not None:
+        return xtts_model
+    if not HAS_XTTS or not VOICE_SAMPLE:
+        return None
+    try:
+        print("[XTTS] Loading Coqui XTTS v2 model (first run may take a minute)...")
+        # cpu=True works everywhere; set gpu=True if you have CUDA
+        xtts_model = CoquiTTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False)
+        print(f"[XTTS] Ready — cloning from: {VOICE_SAMPLE}")
+        return xtts_model
+    except Exception as e:
+        print(f"[XTTS] Failed to load model: {e}")
+        return None
+
+
+def _speak_with_xtts(text: str, out_path: str) -> bool:
+    """Generate speech with Coqui XTTS using your voice sample. out_path should end in .wav."""
+    model = _init_xtts()
+    if model is None:
+        return False
+    try:
+        model.tts_to_file(
+            text=text,
+            file_path=out_path,
+            speaker_wav=VOICE_SAMPLE,
+            language="en",
+        )
+        return os.path.exists(out_path)
+    except Exception as e:
+        print(f"[XTTS speak error]: {e}")
+        return False
+
+
 def speak_jarvis(text: str):
     if not text:
         return
@@ -575,16 +628,36 @@ def speak_jarvis(text: str):
     ui_queue.put(("LOG", f"JARVIS: {text}"))
     ui_queue.put(("STATE", "speaking"))
 
-    temp_filename = f"jarvis_voice_{uuid.uuid4().hex[:10]}.mp3"
+    uid = uuid.uuid4().hex[:10]
+    # Prefer wav when using XTTS (higher quality, no re-encode)
+    use_xtts = HAS_XTTS and VOICE_SAMPLE is not None
+    temp_filename = f"jarvis_voice_{uid}.wav" if use_xtts else f"jarvis_voice_{uid}.mp3"
 
-    async def _generate():
-        communicate = edge_tts.Communicate(
-            text, "en-GB-RyanNeural", rate="-10%", pitch="-6Hz"
-        )
-        await communicate.save(temp_filename)
-
+    generated = False
     try:
-        asyncio.run(_generate())
+        if use_xtts:
+            generated = _speak_with_xtts(text, temp_filename)
+            if generated:
+                ui_queue.put(("LOG", "Voice: XTTS clone"))
+            else:
+                ui_queue.put(("LOG", "XTTS failed — falling back to edge-tts"))
+
+        if not generated:
+            # Fallback: Microsoft neural British voice
+            temp_filename = f"jarvis_voice_{uid}.mp3"
+
+            async def _generate_edge():
+                communicate = edge_tts.Communicate(
+                    text, "en-GB-RyanNeural", rate="-10%", pitch="-6Hz"
+                )
+                await communicate.save(temp_filename)
+
+            asyncio.run(_generate_edge())
+            generated = True
+            ui_queue.put(("LOG", "Voice: edge-tts (en-GB-RyanNeural)"))
+
+        if not generated or not os.path.exists(temp_filename):
+            raise RuntimeError("No audio file produced")
 
         if not pygame.mixer.get_init():
             pygame.mixer.init()
@@ -611,11 +684,13 @@ def speak_jarvis(text: str):
         print(f"[TTS Error]: {e}")
         ui_queue.put(("LOG", f"TTS Error: {e}"))
     finally:
-        if os.path.exists(temp_filename):
-            try:
-                os.remove(temp_filename)
-            except OSError:
-                pass
+        for ext in (".mp3", ".wav"):
+            p = f"jarvis_voice_{uid}{ext}"
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
         ui_queue.put(("STATE", "standby"))
 
 
@@ -1339,8 +1414,17 @@ if __name__ == "__main__":
         print("[!] beautifulsoup4 not found → SearXNG HTML search disabled (pip install beautifulsoup4)")
     if not HAS_DDGS:
         print("[!] ddgs not found → DuckDuckGo fallback search disabled (pip install ddgs)")
+    if HAS_XTTS and VOICE_SAMPLE:
+        print(f"[i] Voice cloning: Coqui XTTS  |  sample: {VOICE_SAMPLE}")
+    elif HAS_XTTS and not VOICE_SAMPLE:
+        print("[!] XTTS installed but no voice sample found.")
+        print("    Put your mp3 next to this script as: jarvis_voice_sample.mp3")
+        print("    Falling back to edge-tts British voice until then.")
+    else:
+        print("[i] Voice: edge-tts (en-GB-RyanNeural)")
+        print("    For cloned voice: pip install TTS  + put jarvis_voice_sample.mp3 next to script")
     print(f"[i] Web search order: SearXNG @ {SEARXNG_URL} (HTML scrape) → DuckDuckGo (ddgs) fallback")
-    print("Tip: Type commands in the bottom bar, or use the search box, even if mic fails.")
+    print("Tip: Type commands in the bottom bar even if mic fails.")
     print()
 
     app = AdvancedJarvisHUD()
