@@ -89,7 +89,7 @@ VOICE_SAMPLE = next((p for p in VOICE_SAMPLE_CANDIDATES if os.path.exists(p)), N
 # CONFIG
 # ==========================================
 # Prefer environment variable. Fallback to the key you used before so it works out of the box.
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or "AQ.Ab8RN6Jb5NydIidweWO2ClncMCYDhjwXs33ESQrR5Rg3glGtTw"
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or " "
 
 try:
     client = genai.Client(api_key=GEMINI_KEY)
