@@ -76,6 +76,14 @@ try:
 except ImportError:
     pass
 
+# sounddevice = reliable continuous audio for clap detection
+try:
+    import sounddevice as sd
+    import numpy as np
+    HAS_SOUNDDEVICE = True
+except ImportError:
+    HAS_SOUNDDEVICE = False
+
 # Path to your voice sample (put the mp3 next to this script)
 VOICE_SAMPLE_CANDIDATES = [
     "jarvis_voice_sample.mp3",
@@ -84,6 +92,9 @@ VOICE_SAMPLE_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_voice.mp3"),
 ]
 VOICE_SAMPLE = next((p for p in VOICE_SAMPLE_CANDIDATES if os.path.exists(p)), None)
+
+# Shared flag: clap detector sets this, jarvis_loop reacts
+clap_event = threading.Event()
 
 # ==========================================
 # CONFIG
@@ -777,54 +788,158 @@ def process_command(command_text: str):
 # ==========================================
 # CONTINUOUS WAKE-WORD LOOP
 # ==========================================
+# ==========================================
+# DOUBLE-CLAP DETECTOR (sounddevice stream)
+# ==========================================
+class DoubleClapDetector:
+    """
+    Listens continuously on the mic. When two sharp volume peaks arrive
+    0.15–0.55 s apart, sets clap_event so jarvis_loop can react.
+    """
+
+    def __init__(self, threshold_multiplier: float = 4.0, min_threshold: float = 0.08):
+        self.threshold_multiplier = threshold_multiplier
+        self.min_threshold = min_threshold
+        self.threshold = 0.15  # will be calibrated
+        self.last_peak_time = 0.0
+        self.calibrated = False
+        self._samples = []
+        self._running = False
+
+    def _calibrate(self, block):
+        """Collect ~1.5 s of ambient noise and set threshold above it."""
+        rms = float(np.sqrt(np.mean(block ** 2)))
+        self._samples.append(rms)
+        if len(self._samples) >= 30:  # ~1.5 s at blocksize 2048 / 16k
+            ambient = float(np.mean(self._samples))
+            self.threshold = max(self.min_threshold, ambient * self.threshold_multiplier)
+            self.calibrated = True
+            ui_queue.put(("LOG", f"Clap calibrated — ambient={ambient:.4f}  threshold={self.threshold:.4f}"))
+            ui_queue.put(("LOG", "Double-clap ready. Clap twice to activate."))
+
+    def _callback(self, indata, frames, time_info, status):
+        if status:
+            return
+        block = indata[:, 0] if indata.ndim > 1 else indata
+        block = block.astype(np.float32)
+
+        if not self.calibrated:
+            self._calibrate(block)
+            return
+
+        rms = float(np.sqrt(np.mean(block ** 2)))
+        now = time.time()
+
+        if rms >= self.threshold:
+            # Debounce: ignore peaks closer than 80 ms (same clap ringing)
+            if now - self.last_peak_time < 0.08:
+                return
+            gap = now - self.last_peak_time
+            if 0.15 <= gap <= 0.55:
+                # Valid double clap
+                ui_queue.put(("LOG", f">> DOUBLE CLAP (RMS={rms:.3f})"))
+                clap_event.set()
+                self.last_peak_time = 0.0
+            else:
+                self.last_peak_time = now
+
+    def start(self):
+        if not HAS_SOUNDDEVICE:
+            ui_queue.put(("LOG", "sounddevice not installed — clap detection disabled. pip install sounddevice"))
+            return
+        self._running = True
+
+        def _run():
+            try:
+                with sd.InputStream(
+                    samplerate=16000,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=2048,
+                    callback=self._callback,
+                ):
+                    ui_queue.put(("LOG", "Clap detector stream started. Stay quiet 1.5s for calibration..."))
+                    while self._running:
+                        time.sleep(0.2)
+            except Exception as e:
+                ui_queue.put(("LOG", f"Clap detector error: {e}"))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def stop(self):
+        self._running = False
+
+
 def jarvis_loop():
-    time.sleep(1.5)  # let UI finish loading
+    """Wake on 'Jarvis' voice OR double-clap, then take a command."""
+    time.sleep(1.5)
 
     try:
         mics = sr.Microphone.list_microphone_names()
         ui_queue.put(("LOG", f"Found {len(mics)} audio input device(s)."))
         if not mics:
-            ui_queue.put(("LOG", "WARNING: no microphone detected — use the text box or push-to-talk instead."))
+            ui_queue.put(("LOG", "WARNING: no microphone detected — use text / push-to-talk."))
     except Exception as e:
         ui_queue.put(("LOG", f"WARNING: could not query microphones ({e})."))
 
-    if not GEMINI_KEY.startswith("AIza"):
-        ui_queue.put(("LOG", "WARNING: GEMINI_KEY doesn't look like a standard key (should start 'AIzaSy'). "
-                             "General chat may fail until you set a real key from aistudio.google.com/apikey"))
+    if not str(GEMINI_KEY).startswith("AIza"):
+        ui_queue.put(("LOG", "WARNING: GEMINI_KEY doesn't look like a standard key (should start 'AIzaSy')."))
 
-    speak_jarvis("Systems online. Say Jarvis to activate, or type a command below.")
-    ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or type a command"))
+    # Start continuous clap detector in background
+    detector = DoubleClapDetector(threshold_multiplier=3.5, min_threshold=0.06)
+    detector.start()
+
+    # Always greet
+    speak_jarvis("Welcome home, sir.")
+    ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or double-clap"))
     ui_queue.put(("STATE", "standby"))
 
     recognizer = sr.Recognizer()
 
+    def _handle_activation():
+        speak_jarvis("At your service, sir.")
+        user_command = listen_once(timeout=8, phrase_limit=15)
+        if user_command:
+            process_command(user_command)
+        ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or double-clap"))
+        ui_queue.put(("STATE", "standby"))
+
     while True:
+        # --- A) Double-clap path (set by sounddevice callback) ---
+        if clap_event.is_set():
+            clap_event.clear()
+            _handle_activation()
+            continue
+
+        # --- B) Voice wake-word path ---
         try:
-            with sr.Microphone() as source:
+            with sr.Microphone(sample_rate=16000) as source:
                 recognizer.adjust_for_ambient_noise(source, duration=0.2)
                 try:
-                    audio = recognizer.listen(source, timeout=3, phrase_time_limit=4)
-                    text = recognizer.recognize_google(audio, language="en-US")
-                except (sr.WaitTimeoutError, sr.UnknownValueError):
+                    audio = recognizer.listen(source, timeout=1.5, phrase_time_limit=3)
+                except sr.WaitTimeoutError:
                     continue
                 except Exception:
-                    time.sleep(0.3)
+                    time.sleep(0.15)
                     continue
 
+            try:
+                text = recognizer.recognize_google(audio, language="en-US")
+            except (sr.UnknownValueError, sr.RequestError):
+                continue
+            except Exception:
+                continue
+
             if text and "jarvis" in text.lower():
-                speak_jarvis("At your service, sir.")
-                user_command = listen_once(timeout=8, phrase_limit=15)
-                if user_command:
-                    process_command(user_command)
-                ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or type a command"))
-                ui_queue.put(("STATE", "standby"))
+                _handle_activation()
 
         except OSError as e:
-            ui_queue.put(("LOG", f"MIC ERROR: {e}. Falling back to text/push-to-talk only."))
-            time.sleep(3)
+            ui_queue.put(("LOG", f"MIC ERROR: {e}. Use text / push-to-talk."))
+            # Still allow clap events while mic is broken
+            time.sleep(2)
         except Exception as e:
             print(f"[Wake loop]: {e}")
-            time.sleep(1)
+            time.sleep(0.5)
 
 
 # ==========================================
@@ -1414,6 +1529,11 @@ if __name__ == "__main__":
         print("[!] beautifulsoup4 not found → SearXNG HTML search disabled (pip install beautifulsoup4)")
     if not HAS_DDGS:
         print("[!] ddgs not found → DuckDuckGo fallback search disabled (pip install ddgs)")
+
+    if not HAS_SOUNDDEVICE:
+        print("[!] sounddevice not found → double-clap disabled (pip install sounddevice numpy)")
+    else:
+        print("[i] Double-clap detection: ENABLED (sounddevice)")
     if HAS_XTTS and VOICE_SAMPLE:
         print(f"[i] Voice cloning: Coqui XTTS  |  sample: {VOICE_SAMPLE}")
     elif HAS_XTTS and not VOICE_SAMPLE:
