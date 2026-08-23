@@ -1,4 +1,3 @@
-
 """
 J.A.R.V.I.S. MARK VII — Full functional rebuild
 ==============================================
@@ -1019,59 +1018,69 @@ class AdvancedJarvisHUD(ctk.CTk):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=8, pady=2)
 
-        # ---- LEFT PANEL ----
-        left = ctk.CTkFrame(body, fg_color="#020a14", border_color="#00c8e0", border_width=1, width=300)
+        # ---- LEFT PANEL (dense telemetry) ----
+        left = ctk.CTkFrame(body, fg_color="#01080f", border_color="#00e5ff", border_width=1, width=310)
         left.pack(side="left", fill="y", padx=(0, 4))
         left.pack_propagate(False)
 
         self._tech_header(left, "SYSTEM TELEMETRY")
-        self.gauge_canvas = tk.Canvas(left, width=280, height=240, bg="#020a14", highlightthickness=0)
-        self.gauge_canvas.pack(pady=2)
+        self.gauge_canvas = tk.Canvas(left, width=290, height=230, bg="#01080f", highlightthickness=0)
+        self.gauge_canvas.pack(pady=(2, 0))
 
-        self._tech_header(left, "ENVIRONMENTAL")
-        self.weather_label = ctk.CTkLabel(left, text="Scanning...", font=("Consolas", 11),
-                                           text_color="#7fd8ff", wraplength=270, justify="left")
-        self.weather_label.pack(pady=2, padx=8)
+        # Mini status strip under gauges
+        mini = ctk.CTkFrame(left, fg_color="#021018", border_color="#0a3040", border_width=1, height=28)
+        mini.pack(fill="x", padx=8, pady=(4, 2))
+        mini.pack_propagate(False)
+        self.core_status = ctk.CTkLabel(
+            mini, text="REACTOR NOMINAL  ·  UPLINK SECURE  ·  AI ONLINE",
+            font=("Consolas", 9, "bold"), text_color="#3db8d0"
+        )
+        self.core_status.pack(pady=4)
+
+        self._tech_header(left, "ENVIRONMENT")
+        env_box = ctk.CTkFrame(left, fg_color="#021018", border_color="#0a3040", border_width=1)
+        env_box.pack(fill="x", padx=8, pady=(0, 4))
+        self.weather_label = ctk.CTkLabel(
+            env_box, text="Scanning atmosphere...", font=("Consolas", 11),
+            text_color="#7fd8ff", wraplength=270, justify="left"
+        )
+        self.weather_label.pack(pady=6, padx=8, anchor="w")
 
         self._tech_header(left, "AUDIO SPECTRUM")
-        self.mic_canvas = tk.Canvas(left, width=270, height=46, bg="#020a14", highlightthickness=0)
+        self.mic_canvas = tk.Canvas(left, width=280, height=42, bg="#01080f", highlightthickness=0)
         self.mic_canvas.pack(pady=2)
 
         self._tech_header(left, "QUICK PROTOCOLS")
         btn_frame = ctk.CTkFrame(left, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=6, pady=3)
+        btn_frame.pack(fill="x", padx=6, pady=2)
 
         btn_cfg = dict(
-            fg_color="#031018", hover_color="#0a2838", border_color="#00e5ff",
-            border_width=1, text_color="#7fd8ff", font=("Consolas", 9, "bold"),
-            height=28, corner_radius=3
+            fg_color="#02121c", hover_color="#00c8e0", border_color="#00e5ff",
+            border_width=1, text_color="#8ae8ff", font=("Consolas", 9, "bold"),
+            height=30, corner_radius=2
         )
         for row_labels in [
             [("LOCK", self._btn_lock), ("VOL 50%", self._btn_vol), ("BATTERY", self._btn_batt)],
             [("NEWS", self._btn_news), ("WEATHER", self._btn_weather), ("SCREEN", self._btn_screen)],
         ]:
             rf = ctk.CTkFrame(btn_frame, fg_color="transparent")
-            rf.pack(fill="x", pady=1)
+            rf.pack(fill="x", pady=2)
             for lab, cmd in row_labels:
-                ctk.CTkButton(rf, text=lab, width=88, command=cmd, **btn_cfg).pack(side="left", padx=2)
+                ctk.CTkButton(rf, text=lab, width=92, command=cmd, **btn_cfg).pack(side="left", padx=2)
 
-        # Search box (also reachable by typing "search for ..." at the bottom)
-        self._tech_header(left, "WEB SEARCH  (SearXNG)")
+        self._tech_header(left, "WEB SEARCH")
         search_row = ctk.CTkFrame(left, fg_color="transparent")
-        search_row.pack(fill="x", padx=8, pady=(0, 6))
-        self.search_entry = ctk.CTkEntry(search_row, placeholder_text="query...", height=26,
-                                          fg_color="#01060c", text_color="#00e5ff", border_color="#00aacc",
-                                          font=("Consolas", 10))
+        search_row.pack(fill="x", padx=8, pady=(0, 8))
+        self.search_entry = ctk.CTkEntry(
+            search_row, placeholder_text="▸ search query...", height=28,
+            fg_color="#01060c", text_color="#00e5ff", border_color="#00aacc",
+            font=("Consolas", 11)
+        )
         self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.bind("<Return>", self._on_search)
-        ctk.CTkButton(search_row, text="GO", width=36, command=self._on_search, **btn_cfg).pack(side="left", padx=(4, 0))
-
-        self._tech_header(left, "CORE STATUS")
-        self.core_status = ctk.CTkLabel(
-            left, text="REACTOR: NOMINAL\nUPLINK: SECURE\nAI CORE: ONLINE",
-            font=("Consolas", 10), text_color="#5bc8e0", justify="left"
+        ctk.CTkButton(search_row, text="GO", width=40, command=self._on_search, **btn_cfg).pack(
+            side="left", padx=(4, 0)
         )
-        self.core_status.pack(pady=4, padx=10, anchor="w")
 
         # ---- CENTER PANEL ----
         center = ctk.CTkFrame(body, fg_color="#020a14", border_color="#00c8e0", border_width=1)
@@ -1126,38 +1135,50 @@ class AdvancedJarvisHUD(ctk.CTk):
         self.console.configure(state="disabled")
 
         # ---- RIGHT PANEL ----
-        right = ctk.CTkFrame(body, fg_color="#020a14", border_color="#00c8e0", border_width=1, width=310)
+        right = ctk.CTkFrame(body, fg_color="#01080f", border_color="#00e5ff", border_width=1, width=320)
         right.pack(side="right", fill="y", padx=(4, 0))
         right.pack_propagate(False)
 
-        self._tech_header(right, "UPLINK TRAFFIC")
-        self.up_canvas = tk.Canvas(right, width=280, height=70, bg="#020a14", highlightthickness=0)
-        self.up_canvas.pack(pady=2)
-
-        self._tech_header(right, "DOWNLINK TRAFFIC")
-        self.down_canvas = tk.Canvas(right, width=280, height=70, bg="#020a14", highlightthickness=0)
-        self.down_canvas.pack(pady=2)
+        self._tech_header(right, "MARK VII  //  SUIT")
+        self.suit_canvas = tk.Canvas(right, width=290, height=220, bg="#01080f", highlightthickness=0)
+        self.suit_canvas.pack(pady=2)
 
         self.armor_label = ctk.CTkLabel(
-            right, text="LINK INTEGRITY  ▓▓▓▓▓▓▓▓▓░  96%",
+            right, text="ARMOR  ▓▓▓▓▓▓▓▓▓░  98%",
             font=("Consolas", 11, "bold"), text_color="#00e5ff"
         )
-        self.armor_label.pack(pady=6)
+        self.armor_label.pack(pady=(2, 4))
+
+        self._tech_header(right, "NETWORK TRAFFIC")
+        traffic = ctk.CTkFrame(right, fg_color="#021018", border_color="#0a3040", border_width=1)
+        traffic.pack(fill="x", padx=8, pady=2)
+        ctk.CTkLabel(traffic, text="UPLINK", font=("Consolas", 8, "bold"),
+                     text_color="#39ff14").pack(anchor="w", padx=6, pady=(4, 0))
+        self.up_canvas = tk.Canvas(traffic, width=280, height=48, bg="#021018", highlightthickness=0)
+        self.up_canvas.pack(pady=(0, 2))
+        ctk.CTkLabel(traffic, text="DOWNLINK", font=("Consolas", 8, "bold"),
+                     text_color="#00e5ff").pack(anchor="w", padx=6)
+        self.down_canvas = tk.Canvas(traffic, width=280, height=48, bg="#021018", highlightthickness=0)
+        self.down_canvas.pack(pady=(0, 4))
 
         self._tech_header(right, "NETWORK FEED")
+        news_box = ctk.CTkFrame(right, fg_color="#021018", border_color="#0a3040", border_width=1)
+        news_box.pack(fill="x", padx=8, pady=2)
         self.news_label = ctk.CTkLabel(
-            right, text="Awaiting headlines — say 'news' or press NEWS", font=("Consolas", 10),
+            news_box, text="Awaiting headlines — say 'news'", font=("Consolas", 10),
             text_color="#7fd8ff", wraplength=280, justify="left"
         )
-        self.news_label.pack(pady=4, padx=8)
+        self.news_label.pack(pady=6, padx=8, anchor="w")
 
         self._tech_header(right, "DIAGNOSTICS")
+        diag_box = ctk.CTkFrame(right, fg_color="#021018", border_color="#0a3040", border_width=1)
+        diag_box.pack(fill="x", padx=8, pady=(2, 8))
         self.diag_label = ctk.CTkLabel(
-            right,
-            text="REPULSOR  ··· OK\nFLIGHT SYS ··· OK\nTARGETING ··· OK\nAI LINK   ··· SECURE",
+            diag_box,
+            text="REPULSOR   ···  OK\nFLIGHT SYS ···  OK\nTARGETING  ···  OK\nAI LINK    ···  SECURE",
             font=("Consolas", 10), text_color="#4ab0c8", justify="left"
         )
-        self.diag_label.pack(pady=4, padx=10, anchor="w")
+        self.diag_label.pack(pady=6, padx=10, anchor="w")
 
         # ========== BOTTOM COMMAND BAR ==========
         bottom = ctk.CTkFrame(self, fg_color="#020a14", border_color="#00e5ff", border_width=1, height=54)
@@ -1188,11 +1209,14 @@ class AdvancedJarvisHUD(ctk.CTk):
         ).pack(side="left", padx=6, pady=10)
 
     def _tech_header(self, parent, title):
-        f = ctk.CTkFrame(parent, fg_color="transparent", height=22)
-        f.pack(fill="x", padx=6, pady=(8, 1))
+        f = ctk.CTkFrame(parent, fg_color="transparent", height=20)
+        f.pack(fill="x", padx=8, pady=(8, 1))
         f.pack_propagate(False)
-        ctk.CTkLabel(f, text=f"◆ {title}", font=("Consolas", 10, "bold"),
+        ctk.CTkLabel(f, text=f"◈ {title}", font=("Consolas", 10, "bold"),
                      text_color="#00e5ff").pack(side="left")
+        # thin accent line on the right
+        line = ctk.CTkFrame(f, fg_color="#0a4050", height=1)
+        line.pack(side="left", fill="x", expand=True, padx=(8, 4), pady=9)
 
     # ---------- Buttons ----------
     def _btn_lock(self):
@@ -1362,19 +1386,50 @@ class AdvancedJarvisHUD(ctk.CTk):
             h = max(2, self.mic_bars[i])
             x0 = i * w + 1
             self.mic_canvas.create_rectangle(
-                x0, 44 - h, x0 + w - 2, 44,
+                x0, 40 - h, x0 + w - 2, 40,
                 fill=STATE_COLORS["listening"] if active else "#0a2030",
                 outline="", tags="bars"
             )
 
+        # Suit wireframe (right panel)
+        if hasattr(self, "suit_canvas"):
+            self._draw_suit(color)
+
         self.after(35, self._animate)
+
+    def _draw_suit(self, color):
+        c = self.suit_canvas
+        c.delete("suit")
+        cx = 145
+        # helmet
+        c.create_oval(cx - 28, 6, cx + 28, 62, outline=color, width=2, tags="suit")
+        c.create_line(cx - 12, 32, cx - 3, 32, fill=color, width=3, tags="suit")
+        c.create_line(cx + 3, 32, cx + 12, 32, fill=color, width=3, tags="suit")
+        # neck / torso
+        c.create_line(cx, 62, cx, 82, fill=color, width=2, tags="suit")
+        c.create_line(cx, 82, cx - 80, 110, fill=color, width=2, tags="suit")
+        c.create_line(cx, 82, cx + 80, 110, fill=color, width=2, tags="suit")
+        c.create_line(cx - 80, 110, cx - 60, 175, fill=color, width=2, tags="suit")
+        c.create_line(cx + 80, 110, cx + 60, 175, fill=color, width=2, tags="suit")
+        c.create_line(cx - 60, 175, cx - 26, 205, fill=color, width=2, tags="suit")
+        c.create_line(cx + 60, 175, cx + 26, 205, fill=color, width=2, tags="suit")
+        c.create_line(cx - 26, 205, cx + 26, 205, fill=color, width=2, tags="suit")
+        # chest reactor
+        pulse = 4 + 2.5 * math.sin(self.pulse_t)
+        c.create_oval(cx - 12 - pulse, 118 - pulse, cx + 12 + pulse, 142 + pulse,
+                      outline=color, width=1, tags="suit")
+        c.create_oval(cx - 9, 121, cx + 9, 139, fill=color, outline="", tags="suit")
+        c.create_polygon(cx, 124, cx - 6, 136, cx + 6, 136, fill="#01080f", outline="", tags="suit")
+        c.create_text(cx, 214, text="SYSTEMS ONLINE", fill=color,
+                      font=("Consolas", 9, "bold"), tags="suit")
 
     # ---------- Waveform panels (real network traffic) ----------
     def _draw_waveform(self, canvas, data, color):
         canvas.delete("wave")
-        w, h = 280, 70
+        w = int(canvas.winfo_reqwidth()) or 280
+        h = int(canvas.winfo_reqheight()) or 48
         maxval = max(max(data), 1.0)
-        step = w / (len(data) - 1)
+        step = w / max(len(data) - 1, 1)
         points = []
         for i, v in enumerate(data):
             x = i * step
@@ -1550,4 +1605,5 @@ if __name__ == "__main__":
     app = AdvancedJarvisHUD()
     threading.Thread(target=jarvis_loop, daemon=True).start()
     app.mainloop()
+  
   
