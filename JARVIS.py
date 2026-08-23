@@ -36,18 +36,25 @@ import speech_recognition as sr
 import customtkinter as ctk
 import tkinter as tk
 from google import genai
-import numpy as np
-import sounddevice as sd
 
-def detect_clap(indata, frames, time_info, status):
-    amplitude = np.linalg.norm(indata) * 10
-    if amplitude > 15:  # Adjust sensitivity threshold here
-        print("Clap detected!")
 
-# Start background audio monitor
-stream = sd.InputStream(callback=detect_clap)
-stream.start()
+try:
+    import numpy as np
+    import sounddevice as sd
+    HAS_SOUNDDEVICE = True
+except ImportError:
+    HAS_SOUNDDEVICE = False
+    np = None
+    sd = None
 
+clap_event = threading.Event()
+
+# Microphone selection:
+# Run once, check the System Log for "[0] Device Name", "[1] ...", then set:
+#   set MIC_DEVICE_INDEX=1   (Windows)  or  export MIC_DEVICE_INDEX=1
+# Leave as None to use the system default mic.
+_mic_env = os.environ.get("MIC_DEVICE_INDEX", "").strip()
+MIC_DEVICE_INDEX = int(_mic_env) if _mic_env.isdigit() else None
 
 try:
     import pyautogui
@@ -695,7 +702,7 @@ def listen_once(timeout: int = 6, phrase_limit: int = 12) -> Optional[str]:
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
     try:
-        with sr.Microphone() as source:
+        with sr.Microphone(device_index=MIC_DEVICE_INDEX) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.4)
             audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
             ui_queue.put(("STATE", "processing"))
@@ -743,7 +750,7 @@ def process_command(command_text: str):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=command_text,
             config={
                 "system_instruction": (
@@ -768,56 +775,139 @@ def process_command(command_text: str):
 
 
 # ==========================================
-# CONTINUOUS WAKE-WORD LOOP
+# DOUBLE-CLAP + WAKE-WORD LOOP
 # ==========================================
+class DoubleClapDetector:
+    """Continuous mic stream. Two sharp peaks 0.15–0.55s apart → clap_event."""
+
+    def __init__(self, multiplier=3.5, min_threshold=0.06):
+        self.multiplier = multiplier
+        self.min_threshold = min_threshold
+        self.threshold = 0.12
+        self.last_peak = 0.0
+        self.calibrated = False
+        self._samples = []
+        self._running = False
+
+    def _callback(self, indata, frames, time_info, status):
+        if not HAS_SOUNDDEVICE:
+            return
+        block = indata[:, 0] if indata.ndim > 1 else indata.reshape(-1)
+        block = np.asarray(block, dtype=np.float32)
+        rms = float(np.sqrt(np.mean(block ** 2)))
+
+        if not self.calibrated:
+            self._samples.append(rms)
+            if len(self._samples) >= 30:
+                ambient = float(np.mean(self._samples))
+                self.threshold = max(self.min_threshold, ambient * self.multiplier)
+                self.calibrated = True
+                ui_queue.put(("LOG", f"Clap calibrated: ambient={ambient:.4f} threshold={self.threshold:.4f}"))
+                ui_queue.put(("LOG", "Double-clap READY — clap twice to activate"))
+            return
+
+        now = time.time()
+        if rms >= self.threshold:
+            if now - self.last_peak < 0.08:
+                return  # same clap ringing
+            gap = now - self.last_peak
+            if 0.15 <= gap <= 0.55:
+                ui_queue.put(("LOG", f">> DOUBLE CLAP (rms={rms:.3f})"))
+                clap_event.set()
+                self.last_peak = 0.0
+            else:
+                self.last_peak = now
+
+    def start(self):
+        if not HAS_SOUNDDEVICE:
+            ui_queue.put(("LOG", "sounddevice missing — clap OFF. pip install sounddevice numpy"))
+            return
+
+        self._running = True
+
+        def _run():
+            try:
+                with sd.InputStream(
+                    samplerate=16000, channels=1, dtype="float32",
+                    blocksize=2048, callback=self._callback,
+                ):
+                    ui_queue.put(("LOG", "Clap stream ON — stay quiet 1.5s to calibrate..."))
+                    while self._running:
+                        time.sleep(0.25)
+            except Exception as e:
+                ui_queue.put(("LOG", f"Clap stream error: {e}"))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+
 def jarvis_loop():
-    time.sleep(1.5)  # let UI finish loading
+    time.sleep(1.5)
 
     try:
         mics = sr.Microphone.list_microphone_names()
-        ui_queue.put(("LOG", f"Found {len(mics)} audio input device(s)."))
-        if not mics:
-            ui_queue.put(("LOG", "WARNING: no microphone detected — use the text box or push-to-talk instead."))
+        ui_queue.put(("LOG", f"Found {len(mics)} audio device(s):"))
+        for i, name in enumerate(mics):
+            mark = "  <-- ACTIVE" if (MIC_DEVICE_INDEX is None and i == 0) or (MIC_DEVICE_INDEX == i) else ""
+            ui_queue.put(("LOG", f"  [{i}] {name}{mark}"))
+        if MIC_DEVICE_INDEX is not None:
+            ui_queue.put(("LOG", f"Using MIC_DEVICE_INDEX={MIC_DEVICE_INDEX}"))
+        else:
+            ui_queue.put(("LOG", "Using system default mic (set MIC_DEVICE_INDEX to pick another)"))
     except Exception as e:
-        ui_queue.put(("LOG", f"WARNING: could not query microphones ({e})."))
+        ui_queue.put(("LOG", f"Mic query failed: {e}"))
 
-    if not GEMINI_KEY.startswith("AIza"):
-        ui_queue.put(("LOG", "WARNING: GEMINI_KEY doesn't look like a standard key (should start 'AIzaSy'). "
-                             "General chat may fail until you set a real key from aistudio.google.com/apikey"))
+    # Start clap detector
+    detector = DoubleClapDetector(multiplier=3.2, min_threshold=0.05)
+    detector.start()
 
-    speak_jarvis("Systems online. Say Jarvis to activate, or type a command below.")
-    ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or type a command"))
+    # Always greet
+    speak_jarvis("Welcome home, sir.")
+    ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or double-clap"))
     ui_queue.put(("STATE", "standby"))
 
     recognizer = sr.Recognizer()
 
+    def _activate():
+        speak_jarvis("At your service, sir.")
+        cmd = listen_once(timeout=8, phrase_limit=15)
+        if cmd:
+            process_command(cmd)
+        ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or double-clap"))
+        ui_queue.put(("STATE", "standby"))
+
     while True:
+        # Clap path
+        if clap_event.is_set():
+            clap_event.clear()
+            _activate()
+            continue
+
+        # Voice "Jarvis" path
         try:
-            with sr.Microphone() as source:
+            with sr.Microphone(device_index=MIC_DEVICE_INDEX, sample_rate=16000) as source:
                 recognizer.adjust_for_ambient_noise(source, duration=0.2)
                 try:
-                    audio = recognizer.listen(source, timeout=3, phrase_time_limit=4)
-                    text = recognizer.recognize_google(audio, language="en-US")
-                except (sr.WaitTimeoutError, sr.UnknownValueError):
+                    audio = recognizer.listen(source, timeout=1.5, phrase_time_limit=3)
+                except sr.WaitTimeoutError:
                     continue
                 except Exception:
-                    time.sleep(0.3)
+                    time.sleep(0.15)
                     continue
 
+            try:
+                text = recognizer.recognize_google(audio, language="en-US")
+            except Exception:
+                continue
+
             if text and "jarvis" in text.lower():
-                speak_jarvis("At your service, sir.")
-                user_command = listen_once(timeout=8, phrase_limit=15)
-                if user_command:
-                    process_command(user_command)
-                ui_queue.put(("STATUS", "STANDBY — Say 'Jarvis' or type a command"))
-                ui_queue.put(("STATE", "standby"))
+                _activate()
 
         except OSError as e:
-            ui_queue.put(("LOG", f"MIC ERROR: {e}. Falling back to text/push-to-talk only."))
-            time.sleep(3)
+            ui_queue.put(("LOG", f"MIC ERROR: {e}"))
+            time.sleep(2)
         except Exception as e:
-            print(f"[Wake loop]: {e}")
-            time.sleep(1)
+            print(f"[Wake]: {e}")
+            time.sleep(0.4)
 
 
 # ==========================================
@@ -1421,4 +1511,5 @@ if __name__ == "__main__":
     app = AdvancedJarvisHUD()
     threading.Thread(target=jarvis_loop, daemon=True).start()
     app.mainloop()
+  
   
