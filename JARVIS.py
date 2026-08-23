@@ -36,6 +36,18 @@ import speech_recognition as sr
 import customtkinter as ctk
 import tkinter as tk
 from google import genai
+import numpy as np
+import sounddevice as sd
+
+def detect_clap(indata, frames, time_info, status):
+    amplitude = np.linalg.norm(indata) * 10
+    if amplitude > 15:  # Adjust sensitivity threshold here
+        print("Clap detected!")
+
+# Start background audio monitor
+stream = sd.InputStream(callback=detect_clap)
+stream.start()
+
 
 try:
     import pyautogui
