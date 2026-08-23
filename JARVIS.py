@@ -1,3 +1,4 @@
+
 """
 J.A.R.V.I.S. MARK VII — Full functional rebuild
 ==============================================
@@ -421,19 +422,57 @@ def execute_system_command(command: str) -> bool:
     cmd = command.lower().strip()
     ui_queue.put(("LOG", f"Processing command: {command}"))
 
-    # Apps
-    if "youtube" in cmd:
-        speak_jarvis("Opening YouTube, sir.")
-        webbrowser.open("https://www.youtube.com")
+    # Apps / media playback
+    # --- YouTube: "play X on youtube", "youtube X", "play X" (default YT) ---
+    if "youtube" in cmd or (
+        cmd.startswith("play ") and "spotify" not in cmd and "on spotify" not in cmd
+    ):
+        query = cmd
+        for phrase in ("play on youtube", "on youtube", "youtube", "play"):
+            query = query.replace(phrase, " ")
+        query = " ".join(query.split()).strip()
+        if query:
+            speak_jarvis(f"Playing {query} on YouTube, sir.")
+            webbrowser.open(
+                "https://www.youtube.com/results?search_query="
+                + requests.utils.quote(query)
+            )
+        else:
+            speak_jarvis("Opening YouTube, sir.")
+            webbrowser.open("https://www.youtube.com")
         return True
-    if "google" in cmd or "browser" in cmd:
-        speak_jarvis("Opening the browser, sir.")
-        webbrowser.open("https://www.google.com")
-        return True
+
+    # --- Spotify: "play X on spotify", "spotify X" ---
     if "spotify" in cmd:
-        speak_jarvis("Opening Spotify, sir.")
-        webbrowser.open("https://open.spotify.com")
+        query = cmd
+        for phrase in ("play on spotify", "on spotify", "spotify", "play"):
+            query = query.replace(phrase, " ")
+        query = " ".join(query.split()).strip()
+        if query:
+            speak_jarvis(f"Playing {query} on Spotify, sir.")
+            webbrowser.open(
+                "https://open.spotify.com/search/"
+                + requests.utils.quote(query)
+            )
+        else:
+            speak_jarvis("Opening Spotify, sir.")
+            webbrowser.open("https://open.spotify.com")
         return True
+
+    if "google" in cmd or "browser" in cmd:
+        # "search google for X" / "google X"
+        query = cmd
+        for phrase in ("search google for", "google for", "search on google", "google", "browser"):
+            query = query.replace(phrase, " ")
+        query = " ".join(query.split()).strip()
+        if query and query not in ("the", "open", "a"):
+            speak_jarvis(f"Searching Google for {query}, sir.")
+            webbrowser.open("https://www.google.com/search?q=" + requests.utils.quote(query))
+        else:
+            speak_jarvis("Opening the browser, sir.")
+            webbrowser.open("https://www.google.com")
+        return True
+
     if "vscode" in cmd or ("open" in cmd and "code" in cmd):
         speak_jarvis("Launching Visual Studio Code, sir.")
         os.system("code")
@@ -1511,5 +1550,4 @@ if __name__ == "__main__":
     app = AdvancedJarvisHUD()
     threading.Thread(target=jarvis_loop, daemon=True).start()
     app.mainloop()
-  
   
